@@ -11,7 +11,8 @@
 // From a PC or phone on the same network: --source pluto:192.168.2.1
 //
 // Phone app: --ws 8073 serves Opus audio, status and commands over a
-// WebSocket (see protocol.h).
+// WebSocket (see protocol.h), plus a waterfall of the band taken from
+// Maia's FPGA spectrometer (or computed here for other sources).
 //
 // Offline, from a recording or stdin (768 kS/s around 10489.750 MHz):
 //   nbd --input capture.cs16 --freq 10489900000 --output audio.s16
@@ -30,9 +31,11 @@
 #include <vector>
 
 #include "beacon_lock.h"
+#include "maia_waterfall.h"
 #include "opus_audio.h"
 #include "pluto_source.h"
 #include "protocol.h"
+#include "spectrum.h"
 #include "ws_server.h"
 #include "wdsp_rx.h"
 
@@ -61,6 +64,7 @@ struct Options {
     bool realtime = false;  // pace a file input like the live stream
     bool loop = false;      // restart a file input at its end
     int dsp_size = 2048;    // WDSP block at 48 kHz
+    std::string spectrum = "auto";  // waterfall: auto, maia, local, off
 };
 
 std::atomic<bool> g_stop{false};
@@ -80,6 +84,7 @@ void usage() {
                  "  --ws-bind ADDR   address to listen on (default 0.0.0.0)\n"
                  "  --bitrate BPS    Opus bitrate (default 16000)\n"
                  "  --opus-complexity N  0..10 (default 5, lower saves CPU on the board)\n"
+                 "  --spectrum S     waterfall source: auto (default: maia when live, else local), maia, local, off\n"
                  "  --dsp-size N     WDSP block at 48 kHz, 1024..8192 (default 2048; smaller = less delay)\n"
                  "  --realtime       read a file input at the real sample rate\n"
                  "  --loop           restart a file input at its end\n"
@@ -122,6 +127,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--opus-complexity") o.opus_complexity = std::atoi(next("--opus-complexity"));
         else if (a == "--realtime") o.realtime = true;
         else if (a == "--loop") o.loop = true;
+        else if (a == "--spectrum") o.spectrum = next("--spectrum");
         else if (a == "--dsp-size") o.dsp_size = std::atoi(next("--dsp-size"));
         else if (a == "--iiod-port") o.pluto.iiod_port = std::atoi(next("--iiod-port"));
         else if (a == "--http-port") o.pluto.http_port = std::atoi(next("--http-port"));
@@ -154,6 +160,14 @@ bool parse(int argc, char** argv, Options& o) {
         if (o.source.size() > 6) o.pluto.host = o.source.substr(6);
         o.pluto.center_hz = o.center_hz;
         o.rate = static_cast<double>(o.pluto.input_rate) / o.pluto.decimation;
+    }
+    if (o.spectrum != "auto" && o.spectrum != "maia" && o.spectrum != "local" && o.spectrum != "off") {
+        std::fprintf(stderr, "nbd: --spectrum must be auto, maia, local or off\n");
+        return false;
+    }
+    if (o.spectrum == "maia" && o.source.empty()) {
+        std::fprintf(stderr, "nbd: --spectrum maia needs --source pluto\n");
+        return false;
     }
     if (o.format != "cs16" && o.format != "cf32") {
         std::fprintf(stderr, "nbd: --format must be cs16 or cf32\n");
@@ -278,11 +292,35 @@ int main(int argc, char** argv) {
     std::unique_ptr<nb::OpusAudio> opus;
     uint16_t audio_seq = 0;
     bool opus_idle = true;
+
+    // Waterfall: only for the app, and only computed while someone watches.
+    std::string spectrum_source = o.ws_port > 0 ? o.spectrum : "off";
+    if (spectrum_source == "auto") spectrum_source = live ? "maia" : "local";
+    nb::SpectrumView view(o.center_hz, o.rate);
+    std::unique_ptr<nb::SpectrumAnalyzer> analyzer;
+    std::unique_ptr<nb::MaiaWaterfall> maia_wf;
+    std::vector<float> spectrum_line;
+    uint16_t spectrum_seq = 0;
+    const bool maia_fallback = o.spectrum == "auto";
+    auto use_local_spectrum = [&]() {
+        maia_wf.reset();
+        analyzer = std::make_unique<nb::SpectrumAnalyzer>(o.rate);
+        analyzer->set_line_rate(view.view().rate);
+        spectrum_source = "local";
+    };
+    if (spectrum_source == "maia") {
+        maia_wf = std::make_unique<nb::MaiaWaterfall>(o.pluto.host, o.pluto.http_port);
+        maia_wf->set_line_rate(view.view().rate);
+        maia_wf->start();
+    } else if (spectrum_source == "local") {
+        use_local_spectrum();
+    }
     if (o.ws_port > 0) {
         try {
             opus = std::make_unique<nb::OpusAudio>(o.bitrate, o.opus_complexity);
             ws = std::make_unique<nb::WsServer>();
-            ws->set_hello(nb::hello_json(o.center_hz, o.rate, min_freq, max_freq, live ? o.source : "file"));
+            ws->set_hello(nb::hello_json(o.center_hz, o.rate, min_freq, max_freq, live ? o.source : "file",
+                                         spectrum_source));
             ws->start(o.ws_bind, o.ws_port);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "nbd: %s\n", e.what());
@@ -309,6 +347,17 @@ int main(int argc, char** argv) {
                 agc = static_cast<int>(c.a);
                 rx.set_agc(agc);
                 break;
+            case nb::Command::Spectrum: {
+                nb::SpectrumRequest r;
+                r.center_hz = c.a;
+                r.span_hz = c.b;
+                r.bins = static_cast<int>(c.c);
+                r.rate = c.d;
+                const nb::SpectrumRequest& v = view.set(r);
+                if (analyzer && v.rate > 0) analyzer->set_line_rate(v.rate);
+                if (maia_wf && v.rate > 0) maia_wf->set_line_rate(v.rate);
+                break;
+            }
             case nb::Command::Bitrate:
                 opus->set_bitrate(static_cast<int>(c.a));
                 break;
@@ -376,8 +425,25 @@ int main(int argc, char** argv) {
             opus->reset();
             opus_idle = true;
         }
+        if (ws && ws->clients() > 0 && view.view().rate > 0) {
+            bool got = false;
+            if (analyzer) {
+                analyzer->process(iq.data(), iq.size());
+                got = analyzer->take_line(spectrum_line);
+            } else if (maia_wf) {
+                got = maia_wf->take_line(spectrum_line);
+            }
+            if (got) ws->broadcast_spectrum(view.pack(spectrum_line, lock.correction_hz(), spectrum_seq++));
+        }
         total += iq.size();
         const double t = total / o.rate;
+        if (maia_wf && maia_fallback && t > 5.0 && maia_wf->lines() == 0) {
+            // Older Maia, or the spectrometer is busy elsewhere: do the FFT here.
+            if (!o.quiet)
+                std::fprintf(stderr, "nbd: no waterfall from maia (%s), computing it locally\n",
+                             maia_wf->last_error().empty() ? "no line" : maia_wf->last_error().c_str());
+            use_local_spectrum();
+        }
         if (o.realtime && !live) {
             const auto due = wall_start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                               std::chrono::duration<double>(t));
@@ -418,6 +484,7 @@ int main(int argc, char** argv) {
                      total / o.rate / wall);
     }
     if (ws) ws->stop();
+    maia_wf.reset();
     if (pluto) {
         try {
             pluto->stop();  // gives the DMA back to the AD9363 for zynqrx / maia

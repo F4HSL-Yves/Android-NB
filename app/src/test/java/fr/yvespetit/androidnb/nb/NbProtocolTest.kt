@@ -59,4 +59,44 @@ class NbProtocolTest {
     fun acceptKeyFromRfc6455() {
         assertEquals("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", NbWebSocket.acceptKey("dGhlIHNhbXBsZSBub25jZQ=="))
     }
+
+    @Test
+    fun helloSpectrumSource() {
+        val h = (NbProtocol.parse(
+            """{"type":"hello","version":1,"center":10489750000,"rate":768000,"min_freq":10489369000,""" +
+                """"max_freq":10490128000,"audio":{"codec":"opus"},"source":"pluto","spectrum":{"source":"maia","max_bins":2048}}""",
+        ) as NbProtocol.HelloMessage).hello
+        assertEquals("pluto", h.source)
+        assertEquals("maia", h.spectrumSource)
+        val old = (NbProtocol.parse("""{"type":"hello","version":1,"center":1,"source":"file"}""") as NbProtocol.HelloMessage).hello
+        assertEquals("off", old.spectrumSource)
+    }
+
+    @Test
+    fun spectrumLine() {
+        // seq 0x0102, centre -120000 Hz, span 24000 Hz, ref -95.5 dB, step 0.5 dB, 3 bins.
+        val f = byteArrayOf(
+            2, 1, 2,
+            0xFF.toByte(), 0xFE.toByte(), 0x2B, 0x40,
+            0, 0, 0x5D, 0xC0.toByte(),
+            0xFC.toByte(), 0x45,
+            5,
+            0, 10, 0xFF.toByte(),
+        )
+        val l = NbProtocol.parseSpectrum(f)!!
+        assertEquals(0x0102, l.seq)
+        assertEquals(-120000, l.centerOffsetHz)
+        assertEquals(24000, l.spanHz)
+        assertEquals(3, l.bins)
+        assertEquals(-95.5f, l.db(0), 1e-4f)
+        assertEquals(-90.5f, l.db(1), 1e-4f)
+        assertEquals(32.0f, l.db(2), 1e-4f)
+        assertTrue(!l.hasData(0) && l.hasData(1))
+        assertNull(NbProtocol.parseAudio(f))
+        assertNull(NbProtocol.parseSpectrum(byteArrayOf(1, 0, 0, 1)))
+        assertEquals(
+            """{"cmd":"spectrum","center":0,"span":520000,"bins":1024,"rate":8.0}""",
+            NbProtocol.spectrumCommand(0, 520000, 1024, 8.0),
+        )
+    }
 }

@@ -43,6 +43,8 @@ public:
     void broadcast_text(const std::string& text);
     // Dropped for a client whose backlog exceeds max_audio_backlog bytes.
     void broadcast_audio(const std::string& payload);
+    // Waterfall lines: dropped earlier than audio, so they never delay it.
+    void broadcast_spectrum(const std::string& payload);
     // Next text message from any client; false when none is waiting.
     bool next_command(std::string& text);
 
@@ -50,6 +52,7 @@ public:
     uint64_t dropped_audio_frames() const { return dropped_.load(); }
 
     size_t max_audio_backlog = 24 * 1024;  // ~4 s at 48 kbit/s, ~12 s at 16
+    size_t max_spectrum_backlog = 4 * 1024;
     size_t max_text_backlog = 512 * 1024;  // beyond: client is dead, close it
 
 private:
@@ -61,7 +64,8 @@ private:
         uint8_t message_opcode = 0;
     };
     struct Outgoing {
-        bool audio;
+        size_t drop_above;  // backlog beyond which this frame is dropped, 0: never
+        bool audio;         // counted in dropped_audio_frames()
         std::string frame;
     };
 

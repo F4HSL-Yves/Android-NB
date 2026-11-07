@@ -93,6 +93,26 @@ nbsynth --seconds 60 > test.cs16
 nbd --input test.cs16 --realtime --loop --ws 8073
 ```
 
+### Waterfall
+
+Les clients reçoivent aussi le waterfall de la bande, en lignes de 8 bits
+par case (0,5 dB par pas, niveau de référence dans l'en-tête), avec la
+dérive du LNB déjà retirée : l'axe est en vraies fréquences de descente.
+L'application choisit la vue (toute la bande ou un zoom autour de la
+fréquence), le nombre de cases (largeur de l'écran, 1024 au plus) et la
+cadence (4 à 12 lignes/s, ou arrêt). Compter environ 50 kbit/s pour
+768 cases à 8 lignes/s, 65 kbit/s pour 1024 cases.
+
+Le spectre vient du spectromètre FPGA de Maia (WebSocket `/waterfall` de
+maia-httpd, déjà branché sur la sortie du DDC), donc sans FFT sur le CPU de
+la carte. Si Maia ne fournit rien dans les 5 premières secondes, ou pour un
+fichier rejoué, `nbd` calcule le spectre lui-même (`--spectrum local`).
+`--spectrum off` le coupe. Côté PC :
+
+```sh
+python3 daemon/tools/nbws_probe.py ws://192.168.2.1:8073 --spectrum 768000,768,8
+```
+
 ## Application Android
 
 L'application se connecte à `nbd` (adresse de la carte, port 8073), joue
@@ -100,7 +120,13 @@ l'audio avec le décodeur Opus d'Android (MediaCodec, aucune bibliothèque
 ajoutée) et affiche l'état de la balise, la correction LNB et le S-mètre.
 On y règle la fréquence (pas de 10 Hz à 10 kHz, ou saisie directe), le
 filtre, l'AGC, le débit et le tampon anti-gigue (80 à 300 ms : plus long en
-4G, plus court en Wi-Fi). La reconnexion est automatique. L'APK de debug est
+4G, plus court en Wi-Fi). La reconnexion est automatique.
+
+Au-dessus du cadran, le spectre et le waterfall montrent la bande avec les
+balises, la fréquence d'écoute (trait rouge) et la bande passante du
+filtre. Toucher un signal centre le filtre dessus ; glisser à
+l'horizontale accorde comme un bouton. Vues : toute la bande, 100, 25 ou
+6 kHz (le zoom suit la fréquence). L'APK de debug est
 produit par la CI.
 
 ## Licence

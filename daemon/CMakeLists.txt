@@ -16,7 +16,7 @@ add_executable(nbsynth tools/nbsynth.cpp)
 install(TARGETS nbsynth RUNTIME DESTINATION bin)
 
 # Core DSP: no external dependency, unit tested on any host.
-add_library(nbcore STATIC src/dsp.cpp src/beacon_lock.cpp)
+add_library(nbcore STATIC src/dsp.cpp src/beacon_lock.cpp src/spectrum.cpp)
 target_include_directories(nbcore PUBLIC src)
 # Fast float math: lets GCC vectorize the FIR loops (NEON on the Zynq, which
 # is not IEEE compliant) and inline complex products. The DSP never relies
@@ -24,20 +24,23 @@ target_include_directories(nbcore PUBLIC src)
 target_compile_options(nbcore PRIVATE -Wall -Wextra -O3 -ffast-math)
 
 # Board access over TCP: iiod (AD9363, DMA) and maia-httpd (DDC).
-add_library(nbpluto STATIC src/iiod_client.cpp src/http_client.cpp src/pluto_source.cpp)
+add_library(nbpluto STATIC src/iiod_client.cpp src/http_client.cpp src/pluto_source.cpp src/maia_waterfall.cpp)
 target_include_directories(nbpluto PUBLIC src)
-target_link_libraries(nbpluto PUBLIC nbcore)
+target_link_libraries(nbpluto PUBLIC nbcore Threads::Threads)
 target_compile_options(nbpluto PRIVATE -Wall -Wextra)
 
 if(NBD_BUILD_TESTS)
   enable_testing()
   add_executable(test_beacon_lock tests/test_beacon_lock.cpp)
   target_link_libraries(test_beacon_lock nbcore)
+  add_executable(test_spectrum tests/test_spectrum.cpp)
+  target_link_libraries(test_spectrum nbcore)
   add_executable(test_pluto tests/test_pluto.cpp)
   target_link_libraries(test_pluto nbpluto)
   if(NOT CMAKE_CROSSCOMPILING)
     add_test(NAME beacon_lock COMMAND test_beacon_lock)
     add_test(NAME pluto COMMAND test_pluto)
+    add_test(NAME spectrum COMMAND test_spectrum)
   endif()
 endif()
 

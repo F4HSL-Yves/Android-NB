@@ -11,6 +11,10 @@ struct HttpResponse {
     std::string body;
 };
 
+// Connected TCP socket with send/receive timeouts; throws on failure.
+// Numeric addresses need no NSS (static binary on the board).
+int tcp_connect(const std::string& host, int port, int timeout_ms = 5000);
+
 HttpResponse http_request(const std::string& host, int port, const std::string& method, const std::string& path,
                           const std::string& json_body = std::string(), int timeout_ms = 15000);
 

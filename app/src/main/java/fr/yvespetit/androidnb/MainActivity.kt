@@ -41,11 +41,13 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -92,6 +94,8 @@ private val agcModes = listOf("Off" to 0, "Lent" to 2, "Moyen" to 3, "Rapide" to
 private val bitrates = listOf(8000, 12000, 16000, 24000)
 private val buffers = listOf(4, 6, 10, 15)  // packets of 20 ms
 private val steps = listOf(10L, 100L, 1000L, 10000L)
+private val spans = listOf(520_000 to "Bande", 100_000 to "100 k", 25_000 to "25 k", 6_000 to "6 k")
+private val waterfallRates = listOf(0, 4, 8, 12)  // lines per second, 0 = off
 
 @Composable
 private fun MainScreen(c: NbConnection) {
@@ -102,6 +106,10 @@ private fun MainScreen(c: NbConnection) {
     var step by rememberSaveable { mutableLongStateOf(100L) }
     var bufferPackets by rememberSaveable { mutableIntStateOf(6) }
     var volume by rememberSaveable { mutableFloatStateOf(1f) }
+    var span by rememberSaveable { mutableIntStateOf(spans[0].first) }
+    var waterfallRate by rememberSaveable { mutableIntStateOf(8) }
+    var viewCenter by rememberSaveable { mutableLongStateOf(0L) }  // 0: band centre
+    var bandWidthPx by remember { mutableIntStateOf(0) }
 
     // Android 17 blocks sockets to the local network (the board) until the
     // user grants "Local network".
@@ -175,6 +183,36 @@ private fun MainScreen(c: NbConnection) {
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         c.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 
+        // Band: spectrum and waterfall, tap or drag to tune
+        val filterLow = status?.filterLowHz ?: 200
+        val filterHigh = status?.filterHighHz ?: 2800
+        // Zoomed views follow the dial when the passband nears an edge.
+        LaunchedEffect(dial, span, filterLow, filterHigh, hello) {
+            val centre = hello?.centerHz ?: return@LaunchedEffect
+            val mid = dial + (filterLow + filterHigh) / 2
+            viewCenter = when {
+                span >= spans[0].first -> centre
+                viewCenter == 0L || kotlin.math.abs(mid - viewCenter) > span * 0.3 -> mid
+                else -> viewCenter
+            }
+        }
+        LaunchedEffect(connected, hello, span, viewCenter, waterfallRate, bandWidthPx) {
+            // Bins follow the screen width (one per pixel, 1024 at most, to spare 4G data).
+            if (connected && hello != null && hello.spectrumSource != "off" && (bandWidthPx > 0 || waterfallRate == 0)) {
+                val bins = if (bandWidthPx > 0) bandWidthPx.coerceIn(128, 1024) else 768
+                c.setSpectrum(viewCenter, span, bins, waterfallRate.toDouble())
+            }
+        }
+        if (hello != null && hello.spectrumSource != "off" && waterfallRate > 0) {
+            BandView(
+                waterfall = c.waterfall, version = c.waterfallVersion, dialHz = dial,
+                filterLowHz = filterLow, filterHighHz = filterHigh, onTune = { tuneTo(it) },
+                modifier = Modifier.onSizeChanged { bandWidthPx = it.width },
+            )
+        }
+        ChipRow("Vue", spans, spans.firstOrNull { it.first == span }, { it.second }) { span = it.first }
+        ChipRow("Chute", waterfallRates, waterfallRate, { if (it == 0) "Off" else "$it/s" }) { waterfallRate = it }
+
         // Frequency
         Text(
             Qo100.formatMHz(dial),
@@ -228,12 +266,12 @@ private fun MainScreen(c: NbConnection) {
             String.format(
                 Locale.FRANCE, "Audio %.1f kbit/s • tampon %d ms • perdus %d • jetés %d • coupures %d",
                 s.kbps, s.bufferMs, s.lost, s.discarded, s.underruns,
-            ),
+            ) + if (s.waterfallKbps > 0) String.format(Locale.FRANCE, " • chute %.0f kbit/s", s.waterfallKbps) else "",
             style = MaterialTheme.typography.bodySmall,
         )
         hello?.let {
             Text(
-                "nbd ${it.source} • ${Qo100.formatMHz(it.minFreqHz)} – ${Qo100.formatMHz(it.maxFreqHz)}" +
+                "nbd ${it.source} • chute ${it.spectrumSource} • ${Qo100.formatMHz(it.minFreqHz)} – ${Qo100.formatMHz(it.maxFreqHz)}" +
                     (status?.let { st -> " • ${st.clients} client(s)" } ?: ""),
                 style = MaterialTheme.typography.bodySmall,
             )

@@ -3,6 +3,7 @@ package fr.yvespetit.androidnb.nb
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
@@ -25,6 +26,12 @@ class NbConnection {
     var stats by mutableStateOf(Stats())
         private set
 
+    /** Waterfall rows; only touched on the main thread. */
+    val waterfall = Waterfall()
+    /** Bumped on every new waterfall row, so Compose redraws. */
+    var waterfallVersion by mutableIntStateOf(0)
+        private set
+
     data class Stats(
         val packets: Long = 0,
         val lost: Long = 0,
@@ -32,6 +39,7 @@ class NbConnection {
         val underruns: Long = 0,
         val bufferMs: Int = 0,
         val kbps: Double = 0.0,
+        val waterfallKbps: Double = 0.0,
     )
 
     val jitter = JitterBuffer()
@@ -71,6 +79,8 @@ class NbConnection {
     fun setFilter(lowHz: Int, highHz: Int) = send(NbProtocol.filterCommand(lowHz, highHz))
     fun setAgc(mode: Int) = send(NbProtocol.agcCommand(mode))
     fun setBitrate(bps: Int) = send(NbProtocol.bitrateCommand(bps))
+    fun setSpectrum(centerHz: Long, spanHz: Int, bins: Int, rate: Double) =
+        send(NbProtocol.spectrumCommand(centerHz, spanHz, bins, rate))
 
     private fun send(text: String) {
         val ws = socket ?: return
@@ -128,6 +138,7 @@ class NbConnection {
 
     private fun receive(ws: NbWebSocket) {
         var bytes = 0L
+        var spectrumBytes = 0L
         var windowStart = System.nanoTime()
         while (wanted) {
             when (val f = ws.receive()) {
@@ -135,9 +146,21 @@ class NbConnection {
                     if (wanted) main.post { lastError = "nbd a fermé la connexion" }
                     return
                 }
-                is NbWebSocket.Binary -> NbProtocol.parseAudio(f.data)?.let {
-                    bytes += f.data.size
-                    jitter.put(it)
+                is NbWebSocket.Binary -> when (f.data.firstOrNull()) {
+                    NbProtocol.AUDIO_OPUS -> NbProtocol.parseAudio(f.data)?.let {
+                        bytes += f.data.size
+                        jitter.put(it)
+                    }
+                    NbProtocol.SPECTRUM_LINE -> NbProtocol.parseSpectrum(f.data)?.let { line ->
+                        spectrumBytes += f.data.size
+                        main.post {
+                            hello?.let {
+                                waterfall.add(line, it.centerHz)
+                                waterfallVersion++
+                            }
+                        }
+                    }
+                    else -> {}
                 }
                 is NbWebSocket.Text -> {
                     when (val m = NbProtocol.parse(f.text)) {
@@ -157,8 +180,10 @@ class NbConnection {
                     underruns = jitter.underruns,
                     bufferMs = jitter.size * 20,
                     kbps = bytes * 8.0 / ((now - windowStart) / 1e9) / 1000.0,
+                    waterfallKbps = spectrumBytes * 8.0 / ((now - windowStart) / 1e9) / 1000.0,
                 )
                 bytes = 0
+                spectrumBytes = 0
                 windowStart = now
                 main.post { stats = s }
             }

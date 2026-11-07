@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "maia_waterfall.h"
 #include "opus_audio.h"
 #include "protocol.h"
 #include "ws_server.h"
@@ -231,10 +232,36 @@ void test_opus() {
 
 }  // namespace
 
+// MaiaWaterfall against a stand-in for maia-httpd's /waterfall (our own
+// server sends the same kind of binary messages: 4096 float32).
+void test_maia_waterfall() {
+    nb::WsServer fake;
+    fake.start("127.0.0.1", 0);
+    nb::MaiaWaterfall wf("127.0.0.1", fake.port());
+    wf.start();
+    for (int i = 0; i < 100 && fake.clients() == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(fake.clients() == 1, "waterfall client did not connect");
+    std::vector<float> line(4096, 1e-6f);
+    line[0] = 3.0f;  // maia's flag
+    line[2100] = 0.25f;
+    fake.broadcast_spectrum(std::string(reinterpret_cast<const char*>(line.data()), line.size() * 4));
+    std::vector<float> got;
+    for (int i = 0; i < 100 && !wf.take_line(got); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(got.size() == 4096, "received %zu bins", got.size());
+    if (got.size() == 4096) {
+        CHECK(got[2100] == 0.25f && got[5] == 1e-6f, "values changed");
+        CHECK(got[0] == got[1], "flag bin not neutralised");
+    }
+    CHECK(wf.lines() == 1, "%llu lines", static_cast<unsigned long long>(wf.lines()));
+    wf.stop();
+    fake.stop();
+}
+
 int main() {
     test_helpers();
     test_server();
     test_opus();
+    test_maia_waterfall();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;

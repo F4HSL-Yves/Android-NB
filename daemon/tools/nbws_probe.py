@@ -4,7 +4,8 @@
     python3 nbws_probe.py ws://192.168.2.1:8073 [--freq 10489900000] [--seconds 10]
 
 Prints the hello and status messages, sends the optional commands and counts
-the Opus audio packets (and the bitrate actually received).
+the Opus audio packets (and the bitrate actually received) and the waterfall
+lines (with the strongest frequency of the last one).
 """
 import argparse
 import base64
@@ -60,6 +61,7 @@ def main():
     ap.add_argument("--freq", type=float, help="USB dial frequency, Hz")
     ap.add_argument("--filter", help="low,high in Hz, e.g. 300,2700")
     ap.add_argument("--bitrate", type=int)
+    ap.add_argument("--spectrum", help="span,bins,rate of the waterfall, e.g. 768000,768,8")
     ap.add_argument("--seconds", type=float, default=5.0)
     a = ap.parse_args()
 
@@ -83,13 +85,25 @@ def main():
     if a.bitrate:
         send_frame(sock, 1, json.dumps({"cmd": "bitrate", "bps": a.bitrate}).encode())
 
+    if a.spectrum:
+        span, bins, rate = (float(x) for x in a.spectrum.split(","))
+        send_frame(sock, 1, json.dumps({"cmd": "spectrum", "center": 0, "span": span, "bins": int(bins),
+                                        "rate": rate}).encode())
+
+    center = None
+    lines = spectrum_bytes = 0
+    last_line = None
     packets = audio_bytes = lost = 0
     last_seq = None
     t0 = time.time()
     while time.time() - t0 < a.seconds:
         op, payload = r.frame()
         if op == 1:
-            print(payload.decode())
+            text = payload.decode()
+            print(text)
+            msg = json.loads(text)
+            if msg.get("type") == "hello":
+                center = msg["center"]
         elif op == 2 and payload[:1] == b"\x01":
             seq = struct.unpack(">H", payload[1:3])[0]
             if last_seq is not None:
@@ -97,12 +111,24 @@ def main():
             last_seq = seq
             packets += 1
             audio_bytes += len(payload) - 3
+        elif op == 2 and payload[:1] == b"\x02":
+            lines += 1
+            spectrum_bytes += len(payload)
+            last_line = payload
         elif op == 8:
             break
     dt = time.time() - t0
     send_frame(sock, 8, b"\x03\xe8")
     print(f"audio: {packets} packets in {dt:.1f} s ({packets / dt:.1f}/s, expected 50), "
           f"{audio_bytes * 8 / dt / 1000:.1f} kbit/s, {lost} lost")
+    if last_line:
+        _, _, off, span, ref, step = struct.unpack(">BHiIhB", last_line[:14])
+        vals = last_line[14:]
+        k = max(range(len(vals)), key=lambda i: vals[i])
+        f = (center or 0) + off - span / 2 + (k + 0.5) * span / len(vals)
+        print(f"waterfall: {lines} lines ({lines / dt:.1f}/s), {spectrum_bytes * 8 / dt / 1000:.1f} kbit/s, "
+              f"{len(vals)} bins, floor {ref / 10:.1f} dBFS, strongest {f / 1e6:.4f} MHz "
+              f"at {(ref + vals[k] * step) / 10:.1f} dBFS")
     return 0 if packets else 1
 
 

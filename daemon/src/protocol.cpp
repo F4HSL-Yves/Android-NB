@@ -44,6 +44,11 @@ Command parse_command(const std::string& json, std::string& error) {
             if (c.a < 0 || c.a > 4) error = "agc: mode 0..4";
             else c.type = Command::Agc;
         }
+    } else if (cmd == "spectrum") {
+        if (num("center", c.a) && num("span", c.b) && num("bins", c.c) && num("rate", c.d)) {
+            if (c.b < 0 || c.c < 1 || c.d < 0) error = "spectrum: bad view";
+            else c.type = Command::Spectrum;
+        }
     } else if (cmd == "bitrate") {
         if (num("bps", c.a)) c.type = Command::Bitrate;
     } else {
@@ -63,13 +68,14 @@ std::string status_json(const StatusInfo& s) {
     return buf;
 }
 
-std::string hello_json(double center_hz, double rate, double min_hz, double max_hz, const std::string& source) {
-    char buf[384];
+std::string hello_json(double center_hz, double rate, double min_hz, double max_hz, const std::string& source,
+                       const std::string& spectrum) {
+    char buf[448];
     std::snprintf(buf, sizeof buf,
                   "{\"type\":\"hello\",\"version\":%d,\"center\":%.0f,\"rate\":%.0f,\"min_freq\":%.0f,"
                   "\"max_freq\":%.0f,\"audio\":{\"codec\":\"opus\",\"rate\":48000,\"channels\":1,\"frame_ms\":20},"
-                  "\"source\":\"%s\"}",
-                  kProtocolVersion, center_hz, rate, min_hz, max_hz, source.c_str());
+                  "\"source\":\"%s\",\"spectrum\":{\"source\":\"%s\",\"max_bins\":2048}}",
+                  kProtocolVersion, center_hz, rate, min_hz, max_hz, source.c_str(), spectrum.c_str());
     return buf;
 }
 

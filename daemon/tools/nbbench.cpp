@@ -15,6 +15,7 @@
 
 #include "beacon_lock.h"
 #include "opus_audio.h"
+#include "spectrum.h"
 #include "wdsp_rx.h"
 
 namespace {
@@ -91,6 +92,25 @@ int main(int argc, char** argv) {
         auto t = clk::now();
         for (size_t b = 0; b < blocks; ++b) fe.process(&iq[b * kBlock], kBlock, narrow[b]);
         report("front end 768k -> 48k", since(t), secs);
+    }
+    {
+        // Waterfall computed on the CPU (fallback when Maia's FPGA one is
+        // not available), 8 lines/s, packed for a 1024-pixel screen.
+        nb::SpectrumAnalyzer an(kRate);
+        an.set_line_rate(8);
+        nb::SpectrumView view(10489750000.0, kRate);
+        nb::SpectrumRequest r;
+        r.bins = 1024;
+        view.set(r);
+        std::vector<float> line;
+        size_t packed = 0;
+        auto t = clk::now();
+        for (size_t b = 0; b < blocks; ++b) {
+            an.process(&iq[b * kBlock], kBlock);
+            if (an.take_line(line)) packed += view.pack(line, 0.0, 0).size();
+        }
+        report("waterfall, local FFT 8 lines/s", since(t), secs);
+        if (packed == 0) std::printf("  (no line produced)\n");
     }
 
     std::vector<float> audio, all_audio;

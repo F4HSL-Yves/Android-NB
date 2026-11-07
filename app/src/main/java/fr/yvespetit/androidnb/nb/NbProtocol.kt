@@ -10,6 +10,7 @@ package fr.yvespetit.androidnb.nb
 object NbProtocol {
     const val VERSION = 1
     const val AUDIO_OPUS: Byte = 0x01
+    const val SPECTRUM_LINE: Byte = 0x02
 
     data class Hello(
         val version: Int,
@@ -18,6 +19,8 @@ object NbProtocol {
         val minFreqHz: Long,
         val maxFreqHz: Long,
         val source: String,
+        /** Where nbd takes the waterfall from: "maia", "local" or "off". */
+        val spectrumSource: String = "off",
     )
 
     data class Status(
@@ -46,6 +49,25 @@ object NbProtocol {
 
     class AudioPacket(val seq: Int, val opus: ByteArray)
 
+    /**
+     * One waterfall row. The view is in true downlink frequencies (nbd has
+     * removed the LNB drift); bin k covers
+     * [left + k * span / bins, left + (k + 1) * span / bins).
+     */
+    class SpectrumLine(
+        val seq: Int,
+        val centerOffsetHz: Int,
+        val spanHz: Int,
+        val refDb: Float,
+        val stepDb: Float,
+        val values: ByteArray,
+    ) {
+        val bins get() = values.size
+        /** Power of bin k in dBFS. */
+        fun db(k: Int): Float = refDb + (values[k].toInt() and 0xFF) * stepDb
+        fun hasData(k: Int): Boolean = values[k].toInt() != 0
+    }
+
     fun parse(text: String): Message = when (string(text, "type")) {
         "hello" -> HelloMessage(
             Hello(
@@ -55,6 +77,9 @@ object NbProtocol {
                 minFreqHz = number(text, "min_freq")?.toLong() ?: 0L,
                 maxFreqHz = number(text, "max_freq")?.toLong() ?: 0L,
                 source = string(text, "source") ?: "",
+                spectrumSource = text.indexOf("\"spectrum\"").let { i ->
+                    if (i < 0) "off" else string(text.substring(i + 1), "source") ?: "off"
+                },
             ),
         )
         "status" -> {
@@ -93,10 +118,30 @@ object NbProtocol {
         return AudioPacket(seq, frame.copyOfRange(3, frame.size))
     }
 
+    /**
+     * Binary frame 0x02 (big endian): seq u16, view centre minus band centre
+     * (Hz) i32, span (Hz) u32, ref (0.1 dB) i16, step (0.1 dB) u8, then one
+     * byte per bin.
+     */
+    fun parseSpectrum(frame: ByteArray): SpectrumLine? {
+        if (frame.size < 15 || frame[0] != SPECTRUM_LINE) return null
+        fun u(i: Int) = frame[i].toInt() and 0xFF
+        val seq = (u(1) shl 8) or u(2)
+        val center = (u(3) shl 24) or (u(4) shl 16) or (u(5) shl 8) or u(6)
+        val span = (u(7) shl 24) or (u(8) shl 16) or (u(9) shl 8) or u(10)
+        val ref = ((u(11) shl 8) or u(12)).toShort().toInt()
+        val step = u(13)
+        if (span <= 0 || step == 0) return null
+        return SpectrumLine(seq, center, span, ref / 10f, step / 10f, frame.copyOfRange(14, frame.size))
+    }
+
     fun freqCommand(hz: Long) = """{"cmd":"freq","hz":$hz}"""
     fun filterCommand(lowHz: Int, highHz: Int) = """{"cmd":"filter","low":$lowHz,"high":$highHz}"""
     fun agcCommand(mode: Int) = """{"cmd":"agc","mode":$mode}"""
     fun bitrateCommand(bps: Int) = """{"cmd":"bitrate","bps":$bps}"""
+    /** Waterfall view shared by all clients; rate 0 stops it. centerHz 0 = band centre. */
+    fun spectrumCommand(centerHz: Long, spanHz: Int, bins: Int, rate: Double) =
+        """{"cmd":"spectrum","center":$centerHz,"span":$spanHz,"bins":$bins,"rate":$rate}"""
 
     private fun valueStart(json: String, key: String): Int? {
         val k = "\"$key\""

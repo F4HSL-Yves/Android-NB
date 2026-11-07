@@ -174,7 +174,7 @@ void WsServer::set_hello(const std::string& text) {
 void WsServer::broadcast_text(const std::string& text) {
     {
         std::lock_guard<std::mutex> lk(mu_);
-        pending_.push_back({false, websocket_frame(0x1, text)});
+        pending_.push_back({0, false, websocket_frame(0x1, text)});
     }
     wake();
 }
@@ -183,7 +183,16 @@ void WsServer::broadcast_audio(const std::string& payload) {
     if (clients_ == 0) return;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        pending_.push_back({true, websocket_frame(0x2, payload)});
+        pending_.push_back({max_audio_backlog, true, websocket_frame(0x2, payload)});
+    }
+    wake();
+}
+
+void WsServer::broadcast_spectrum(const std::string& payload) {
+    if (clients_ == 0) return;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        pending_.push_back({max_spectrum_backlog, false, websocket_frame(0x2, payload)});
     }
     wake();
 }
@@ -198,8 +207,8 @@ bool WsServer::next_command(std::string& text) {
 
 void WsServer::queue(Client& c, const Outgoing& o) {
     if (!c.open || c.closing) return;
-    if (o.audio && c.out.size() > max_audio_backlog) {
-        ++dropped_;
+    if (o.drop_above && c.out.size() > o.drop_above) {
+        if (o.audio) ++dropped_;
         return;
     }
     if (c.out.size() > max_text_backlog) {

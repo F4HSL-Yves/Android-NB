@@ -38,8 +38,7 @@ std::string dechunk(const std::string& body) {
 
 }  // namespace
 
-HttpResponse http_request(const std::string& host, int port, const std::string& method, const std::string& path,
-                          const std::string& json_body, int timeout_ms) {
+int tcp_connect(const std::string& host, int port, int timeout_ms) {
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -63,11 +62,17 @@ HttpResponse http_request(const std::string& host, int port, const std::string& 
         fd = -1;
     }
     freeaddrinfo(res);
-    if (fd < 0) throw std::runtime_error("cannot connect to http://" + host + ":" + service);
+    if (fd < 0) throw std::runtime_error("cannot connect to " + host + ":" + service);
     timeval tv{timeout_ms / 1000, (timeout_ms % 1000) * 1000};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 
+    return fd;
+}
+
+HttpResponse http_request(const std::string& host, int port, const std::string& method, const std::string& path,
+                          const std::string& json_body, int timeout_ms) {
+    const int fd = tcp_connect(host, port, timeout_ms);
     std::string req = method + " " + path + " HTTP/1.1\r\nHost: " + host + "\r\nAccept: application/json\r\n";
     if (!json_body.empty()) req += "Content-Type: application/json\r\n";
     req += "Content-Length: " + std::to_string(json_body.size()) + "\r\nConnection: close\r\n\r\n" + json_body;
