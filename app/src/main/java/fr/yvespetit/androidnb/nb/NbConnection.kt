@@ -164,11 +164,13 @@ class NbConnection {
     }
 
     private fun loop(url: String) {
+        var failures = 0
         while (wanted) {
             main.post { link = Link.CONNECTING }
             try {
                 val ws = NbWebSocket.connect(url)
                 socket = ws
+                failures = 0
                 if (!wanted) {
                     ws.close()
                     break
@@ -180,7 +182,10 @@ class NbConnection {
                 }
                 receive(ws)
             } catch (e: Exception) {
-                if (wanted) main.post { lastError = e.message ?: e.javaClass.simpleName }
+                // nbd takes a few seconds to come up after a switch to NB (or
+                // at boot): only report it once it keeps failing (~10 s).
+                failures++
+                if (wanted && failures >= 6) main.post { lastError = e.message ?: e.javaClass.simpleName }
             } finally {
                 socket?.close()
                 socket = null
@@ -252,6 +257,6 @@ class NbConnection {
     }
 
     companion object {
-        private const val RETRY_MS = 3000L
+        private const val RETRY_MS = 1500L
     }
 }
