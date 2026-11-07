@@ -111,6 +111,8 @@ boot)
     # mosquitto restarts.
     (
         while true; do
+            # zynqrx's state now, so its next repeat is not taken for a change.
+            last_proc=$(mosquitto_sub -h 127.0.0.1 -t dt/zynqrx/process -C 1 -W 3 2>/dev/null)
             mosquitto_sub -h 127.0.0.1 -i nbctl -v -t cmd/nb/mode -t dt/zynqrx/process 2>/dev/null |
                 while read -r topic m; do
                     case "$topic" in
@@ -118,8 +120,12 @@ boot)
                         if [ "$m" = "$(current)" ]; then pub state/nb/mode "$m"; else switch "$m"; fi
                         ;;
                     dt/zynqrx/process)
-                        # Our own pause_zynqrx "stop" arrives once the mode is
-                        # already nb, so it never switches twice.
+                        # zynqrx repeats its state every second: act only on
+                        # a change, so a manual cmd/nb/mode datv holds. Our own
+                        # pause_zynqrx "stop" arrives once the mode is already
+                        # nb, so it never switches twice.
+                        [ "$m" = "$last_proc" ] && continue
+                        last_proc=$m
                         if [ "$m" = start ] && [ "$(current)" = nb ]; then
                             log "DATV reception started: leaving nb"
                             switch datv
