@@ -1,9 +1,14 @@
 package fr.yvespetit.androidnb
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -97,6 +103,30 @@ private fun MainScreen(c: NbConnection) {
     var bufferPackets by rememberSaveable { mutableIntStateOf(6) }
     var volume by rememberSaveable { mutableFloatStateOf(1f) }
 
+    // Android 17 blocks sockets to the local network (the board) until the
+    // user grants "Local network".
+    val context = LocalContext.current
+    var permissionError by rememberSaveable { mutableStateOf<String?>(null) }
+    fun localNetworkGranted() = Build.VERSION.SDK_INT < 37 ||
+        context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            permissionError = null
+            c.connect("ws://$host:$port/")
+        } else {
+            permissionError = "Android refuse l'accès au réseau local : autorise « Réseau local » pour QO-100 NB " +
+                "dans les réglages de l'appli, sinon la carte reste injoignable en Wi-Fi."
+        }
+    }
+    fun listen() {
+        if (localNetworkGranted()) {
+            permissionError = null
+            c.connect("ws://$host:$port/")
+        } else {
+            permissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+        }
+    }
+
     val status = c.status
     val hello = c.hello
     val connected = c.link == NbConnection.Link.CONNECTED
@@ -138,10 +168,11 @@ private fun MainScreen(c: NbConnection) {
             )
         }
         if (c.link == NbConnection.Link.DISCONNECTED) {
-            Button(onClick = { c.connect("ws://$host:$port/") }, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
+            Button(onClick = { listen() }, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
         } else {
             OutlinedButton(onClick = { c.disconnect() }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
         }
+        permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         c.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 
         // Frequency
