@@ -4,6 +4,7 @@
 // well above 1x for nbd to be usable.
 //   nbbench [--seconds 10] [--wisdom DIR] [--dsp-size 2048] [--legacy]
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -48,6 +49,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep the lines if a stage aborts
     const size_t blocks = static_cast<size_t>(seconds * kRate / kBlock);
     const double secs = blocks * kBlock / kRate;
 
@@ -118,11 +120,26 @@ int main(int argc, char** argv) {
         report("WDSP USB at 768k (old path)", since(t), secs);
     }
     {
+        size_t bad = 0;
+        float peak = 0.0f;
+        for (float v : all_audio) {
+            if (!std::isfinite(v)) ++bad;
+            else peak = std::max(peak, std::fabs(v));
+        }
+        std::printf("  audio: %zu samples, peak %.3f, non-finite %zu\n", all_audio.size(), peak, bad);
+        nb::OpusAudio tone_enc(16000, 5);
+        std::vector<float> tone(48000);
+        for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.3f * static_cast<float>(std::sin(2 * kPi * 1000.0 * i / 48000.0));
+        size_t tone_packets = 0;
+        tone_enc.push(tone.data(), tone.size(), [&](const std::string&) { ++tone_packets; });
+        std::printf("  Opus on a clean 1 kHz tone: %zu packets (expected 50)\n", tone_packets);
         nb::OpusAudio enc(16000, 5);
         size_t packets = 0;
         auto t = clk::now();
         enc.push(all_audio.data(), all_audio.size(), [&](const std::string&) { ++packets; });
         report("Opus 16 kbit/s, complexity 5", since(t), all_audio.size() / 48000.0);
+        std::printf("  %zu packets, %llu non-finite samples replaced\n", packets,
+                    static_cast<unsigned long long>(enc.bad_samples()));
     }
     std::printf("total of the tracking path must stay well above 1x\n");
     return 0;

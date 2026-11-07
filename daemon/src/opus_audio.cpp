@@ -3,6 +3,7 @@
 #include <opus/opus.h>
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace nb {
@@ -36,7 +37,21 @@ void OpusAudio::reset() {
 }
 
 void OpusAudio::push(const float* pcm, size_t n, const std::function<void(const std::string&)>& packet) {
+    // libopus asserts (abort) on some non-finite input: never hand it NaN,
+    // infinity or wildly out-of-range samples.
+    const size_t start = buf_.size();
     buf_.insert(buf_.end(), pcm, pcm + n);
+    for (size_t i = start; i < buf_.size(); ++i) {
+        float& v = buf_[i];
+        if (!std::isfinite(v)) {
+            v = 0.0f;
+            ++bad_samples_;
+        } else if (v > 1.0f) {
+            v = 1.0f;
+        } else if (v < -1.0f) {
+            v = -1.0f;
+        }
+    }
     size_t pos = 0;
     while (buf_.size() - pos >= static_cast<size_t>(kFrame)) {
         const opus_int32 len = opus_encode_float(enc_, buf_.data() + pos, kFrame,

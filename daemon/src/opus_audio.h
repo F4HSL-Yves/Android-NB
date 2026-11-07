@@ -28,12 +28,15 @@ public:
     void push(const float* pcm, size_t n, const std::function<void(const std::string&)>& packet);
     // Drops buffered samples (no client listening).
     void reset();
+    // Non-finite samples replaced by silence since start (should stay 0).
+    uint64_t bad_samples() const { return bad_samples_; }
 
 private:
     OpusEncoder* enc_ = nullptr;
     int bitrate_;
     std::vector<float> buf_;
     std::string scratch_;
+    uint64_t bad_samples_ = 0;
 };
 
 }  // namespace nb
