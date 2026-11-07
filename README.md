@@ -113,6 +113,32 @@ fichier rejoué, `nbd` calcule le spectre lui-même (`--spectrum local`).
 python3 daemon/tools/nbws_probe.py ws://192.168.2.1:8073 --spectrum 768000,768,8
 ```
 
+## Installation durable sur la carte (Tezuka)
+
+La racine de la carte est en RAM et la jffs2 est presque pleine : `nbd` et
+ses réglages vont sur la carte SD (`/boot/nb/`), et seul un petit
+`autorun.sh` va dans la jffs2 (lancé par `S98autostart`).
+
+```sh
+# Depuis le PC (scp -O : la carte n'a pas sftp-server)
+ssh root@192.168.1.125 mkdir -p /boot/nb
+scp -O nbd board/nbctl.sh board/nb.conf root@192.168.1.125:/boot/nb/
+scp -O board/autorun.sh root@192.168.1.125:/mnt/jffs2/autorun.sh
+```
+
+Une seule application peut tenir le récepteur : `nbctl.sh` bascule entre
+la réception DATV (`zynqrx`) et la bande étroite (`nbd`), relance `nbd`
+s'il s'arrête, et retient le mode pour le prochain démarrage.
+
+```sh
+mosquitto_pub -h 192.168.1.125 -t cmd/nb/mode -m nb     # bande étroite
+mosquitto_pub -h 192.168.1.125 -t cmd/nb/mode -m datv   # retour au DATV
+mosquitto_sub -h 192.168.1.125 -t state/nb/mode         # mode courant (retenu)
+```
+
+Sur la carte : `sh /boot/nb/nbctl.sh nb|datv|status`. Le journal de `nbd`
+est dans `/tmp/nbd.log`, la wisdom FFTW dans `/boot/nb/`.
+
 ## Application Android
 
 L'application se connecte à `nbd` (adresse de la carte, port 8073), joue
