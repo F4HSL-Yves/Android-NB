@@ -93,6 +93,16 @@ nbsynth --seconds 60 > test.cs16
 nbd --input test.cs16 --realtime --loop --ws 8073
 ```
 
+## Application Android
+
+L'application se connecte à `nbd` (adresse de la carte, port 8073), joue
+l'audio avec le décodeur Opus d'Android (MediaCodec, aucune bibliothèque
+ajoutée) et affiche l'état de la balise, la correction LNB et le S-mètre.
+On y règle la fréquence (pas de 10 Hz à 10 kHz, ou saisie directe), le
+filtre, l'AGC, le débit et le tampon anti-gigue (80 à 300 ms : plus long en
+4G, plus court en Wi-Fi). La reconnexion est automatique. L'APK de debug est
+produit par la CI.
+
 ## Licence
 
 GPL-3.0 (WDSP est sous GPL-2.0 ou ultérieure).
