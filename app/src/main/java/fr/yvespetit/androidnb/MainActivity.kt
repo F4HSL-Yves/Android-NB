@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,7 +66,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize()) { MainScreen(connection) }
+                // Edge to edge (Android 15+): keep the content clear of the status bar.
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    Box(modifier = Modifier.safeDrawingPadding()) { MainScreen(connection) }
+                }
             }
         }
     }
@@ -99,8 +103,10 @@ private val waterfallRates = listOf(0, 4, 8, 12)  // lines per second, 0 = off
 
 @Composable
 private fun MainScreen(c: NbConnection) {
-    var host by rememberSaveable { mutableStateOf("192.168.2.1") }
-    var port by rememberSaveable { mutableStateOf("8073") }
+    // The board address is remembered between launches.
+    val prefs = LocalContext.current.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
+    var host by rememberSaveable { mutableStateOf(prefs.getString("host", "192.168.1.125")!!) }
+    var port by rememberSaveable { mutableStateOf(prefs.getString("port", "8073")!!) }
     var dialText by rememberSaveable { mutableStateOf("10489,900") }
     var dial by rememberSaveable { mutableLongStateOf(10_489_900_000L) }
     var step by rememberSaveable { mutableLongStateOf(100L) }
@@ -120,6 +126,7 @@ private fun MainScreen(c: NbConnection) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
             permissionError = null
+            prefs.edit().putString("host", host).putString("port", port).apply()
             c.connect(host, port.toIntOrNull() ?: 8073)
         } else {
             permissionError = "Android refuse l'accès au réseau local : autorise « Réseau local » pour QO-100 NB " +
@@ -129,6 +136,7 @@ private fun MainScreen(c: NbConnection) {
     fun listen() {
         if (localNetworkGranted()) {
             permissionError = null
+            prefs.edit().putString("host", host).putString("port", port).apply()
             c.connect(host, port.toIntOrNull() ?: 8073)
         } else {
             permissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
