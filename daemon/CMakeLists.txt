@@ -20,12 +20,21 @@ add_library(nbcore STATIC src/dsp.cpp src/beacon_lock.cpp)
 target_include_directories(nbcore PUBLIC src)
 target_compile_options(nbcore PRIVATE -Wall -Wextra)
 
+# Board access over TCP: iiod (AD9363, DMA) and maia-httpd (DDC).
+add_library(nbpluto STATIC src/iiod_client.cpp src/http_client.cpp src/pluto_source.cpp)
+target_include_directories(nbpluto PUBLIC src)
+target_link_libraries(nbpluto PUBLIC nbcore)
+target_compile_options(nbpluto PRIVATE -Wall -Wextra)
+
 if(NBD_BUILD_TESTS)
   enable_testing()
   add_executable(test_beacon_lock tests/test_beacon_lock.cpp)
   target_link_libraries(test_beacon_lock nbcore)
+  add_executable(test_pluto tests/test_pluto.cpp)
+  target_link_libraries(test_pluto nbpluto)
   if(NOT CMAKE_CROSSCOMPILING)
     add_test(NAME beacon_lock COMMAND test_beacon_lock)
+    add_test(NAME pluto COMMAND test_pluto)
   endif()
 endif()
 
@@ -42,7 +51,7 @@ if(NBD_WITH_WDSP)
   target_link_libraries(wdsp PUBLIC FFTW::fftw3 Threads::Threads m)
 
   add_executable(nbd src/main.cpp src/wdsp_rx.cpp)
-  target_link_libraries(nbd PRIVATE nbcore wdsp)
+  target_link_libraries(nbd PRIVATE nbpluto wdsp)
   target_compile_options(nbd PRIVATE -Wall -Wextra)
   install(TARGETS nbd RUNTIME DESTINATION bin)
 

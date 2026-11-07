@@ -5,21 +5,28 @@
 // on the CW beacon, demodulates one USB station with WDSP and writes 48 kHz
 // mono audio. The network side (Opus, WebSocket, MQTT) comes next.
 //
-// Example on the board, DDC already set to 768 kS/s around 10489.750 MHz
-// (the whole 500 kHz transponder plus the CW beacon):
-//   iio_readdev -u local: -b 4096 cf-ad9361-lpc voltage0 voltage1 |
-//     nbd --center 10489750000 --freq 10489900000 --output - > /dev/null
+// Live on the board (Tezuka + Maia): nbd sets the AD9363 and the Maia DDC
+// itself, routes the DDC to the DMA and reads the IQ through iiod:
+//   nbd --source pluto --freq 10489900000 --output - | aplay ...
+// From a PC or phone on the same network: --source pluto:192.168.2.1
+//
+// Offline, from a recording or stdin (768 kS/s around 10489.750 MHz):
+//   nbd --input capture.cs16 --freq 10489900000 --output audio.s16
+#include <atomic>
 #include <cerrno>
+#include <csignal>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "beacon_lock.h"
+#include "pluto_source.h"
 #include "wdsp_rx.h"
 
 namespace {
@@ -35,11 +42,25 @@ struct Options {
     double search_hz = 25000.0;
     std::string wisdom_dir;
     bool quiet = false;
+    // Live source
+    std::string source;  // empty: --input; "pluto" or "pluto:HOST"
+    nb::PlutoConfig pluto;
+    double duration_s = 0.0;  // 0: until stopped
 };
+
+std::atomic<bool> g_stop{false};
+void on_signal(int) { g_stop = true; }
 
 void usage() {
     std::fprintf(stderr,
                  "usage: nbd [options]\n"
+                 "  --source pluto[:HOST]  live IQ from a Tezuka/Maia board (default host 127.0.0.1)\n"
+                 "  --iiod-port N    iiod TCP port (default 30431)\n"
+                 "  --http-port N    maia-httpd port (default 80)\n"
+                 "  --lnb-lo HZ      nominal LNB local oscillator (default 9750000000)\n"
+                 "  --lo-offset HZ   AD9363 LO above the centre, keeps DC out (default 500000)\n"
+                 "  --gain DB|MODE   manual gain in dB, or slow_attack/fast_attack/hybrid (default slow_attack)\n"
+                 "  --duration S     stop after S seconds of IQ (default: until Ctrl-C)\n"
                  "  --input FILE     IQ input, '-' for stdin (default -)\n"
                  "  --format F       cs16 (default, 12-bit in int16) or cf32\n"
                  "  --rate HZ        IQ sample rate (default 768000)\n"
@@ -72,12 +93,38 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--search") o.search_hz = std::atof(next("--search"));
         else if (a == "--wisdom") o.wisdom_dir = next("--wisdom");
         else if (a == "--quiet") o.quiet = true;
+        else if (a == "--source") o.source = next("--source");
+        else if (a == "--iiod-port") o.pluto.iiod_port = std::atoi(next("--iiod-port"));
+        else if (a == "--http-port") o.pluto.http_port = std::atoi(next("--http-port"));
+        else if (a == "--lnb-lo") o.pluto.lnb_lo_hz = std::atof(next("--lnb-lo"));
+        else if (a == "--lo-offset") o.pluto.lo_offset_hz = std::atof(next("--lo-offset"));
+        else if (a == "--duration") o.duration_s = std::atof(next("--duration"));
+        else if (a == "--gain") {
+            const std::string g = next("--gain");
+            char* end = nullptr;
+            const double db = std::strtod(g.c_str(), &end);
+            if (end != g.c_str() && *end == '\0') {
+                o.pluto.gain_mode = "manual";
+                o.pluto.gain_db = db;
+            } else {
+                o.pluto.gain_mode = g;
+            }
+        }
         else if (a == "--help" || a == "-h") { usage(); std::exit(0); }
         else {
             std::fprintf(stderr, "nbd: unknown option %s\n", a.c_str());
             usage();
             return false;
         }
+    }
+    if (!o.source.empty()) {
+        if (o.source.compare(0, 5, "pluto") != 0 || (o.source.size() > 5 && o.source[5] != ':')) {
+            std::fprintf(stderr, "nbd: --source must be pluto or pluto:HOST\n");
+            return false;
+        }
+        if (o.source.size() > 6) o.pluto.host = o.source.substr(6);
+        o.pluto.center_hz = o.center_hz;
+        o.rate = static_cast<double>(o.pluto.input_rate) / o.pluto.decimation;
     }
     if (o.format != "cs16" && o.format != "cf32") {
         std::fprintf(stderr, "nbd: --format must be cs16 or cf32\n");
@@ -92,7 +139,7 @@ bool parse(int argc, char** argv, Options& o) {
 }
 
 // Reads exactly n complex samples; returns false at end of input.
-bool read_block(FILE* f, const std::string& format, std::vector<nb::cf>& out, size_t n) {
+bool read_file_block(FILE* f, const std::string& format, std::vector<nb::cf>& out, size_t n) {
     out.resize(n);
     if (format == "cf32") return std::fread(out.data(), sizeof(nb::cf), n, f) == n;
     static std::vector<int16_t> raw;
@@ -103,14 +150,58 @@ bool read_block(FILE* f, const std::string& format, std::vector<nb::cf>& out, si
     return true;
 }
 
+// Cuts the board's DMA buffers (16384 samples) into WDSP blocks.
+class LiveReader {
+public:
+    explicit LiveReader(nb::PlutoSource& src) : src_(src) {}
+    bool read(std::vector<nb::cf>& out, size_t n) {
+        while (pending_.size() - pos_ < n) {
+            if (g_stop) return false;
+            pending_.erase(pending_.begin(), pending_.begin() + static_cast<long>(pos_));
+            pos_ = 0;
+            src_.read(chunk_);
+            pending_.insert(pending_.end(), chunk_.begin(), chunk_.end());
+        }
+        out.assign(pending_.begin() + static_cast<long>(pos_), pending_.begin() + static_cast<long>(pos_ + n));
+        pos_ += n;
+        return true;
+    }
+
+private:
+    nb::PlutoSource& src_;
+    std::vector<nb::cf> chunk_, pending_;
+    size_t pos_ = 0;
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
     Options o;
     if (!parse(argc, argv, o)) return 2;
 
-    FILE* in = o.input == "-" ? stdin : std::fopen(o.input.c_str(), "rb");
-    if (!in) {
+    const bool live = !o.source.empty();
+    std::unique_ptr<nb::PlutoSource> pluto;
+    std::unique_ptr<LiveReader> live_reader;
+    if (live) {
+        std::signal(SIGINT, on_signal);
+        std::signal(SIGTERM, on_signal);
+        std::signal(SIGPIPE, on_signal);
+        try {
+            pluto = std::make_unique<nb::PlutoSource>(o.pluto);
+            pluto->start();
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "nbd: %s\n", e.what());
+            return 1;
+        }
+        if (std::fabs(pluto->output_rate() - o.rate) > 1.0) {
+            std::fprintf(stderr, "nbd: DDC gives %.0f S/s, expected %.0f\n", pluto->output_rate(), o.rate);
+            return 1;
+        }
+        if (!o.quiet) std::fprintf(stderr, "nbd: %s\n", pluto->summary().c_str());
+        live_reader = std::make_unique<LiveReader>(*pluto);
+    }
+    FILE* in = live ? nullptr : o.input == "-" ? stdin : std::fopen(o.input.c_str(), "rb");
+    if (!live && !in) {
         std::fprintf(stderr, "nbd: cannot open %s: %s\n", o.input.c_str(), std::strerror(errno));
         return 1;
     }
@@ -144,7 +235,20 @@ int main(int argc, char** argv) {
     std::vector<int16_t> pcm;
     uint64_t total = 0;
     double next_report = 1.0;
-    while (read_block(in, o.format, iq, block)) {
+    const uint64_t max_samples = o.duration_s > 0 ? static_cast<uint64_t>(o.duration_s * o.rate) : UINT64_MAX;
+    int exit_code = 0;
+    auto next_block = [&]() -> bool {
+        if (total >= max_samples || g_stop) return false;
+        if (!live) return read_file_block(in, o.format, iq, block);
+        try {
+            return live_reader->read(iq, block);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "nbd: %s\n", e.what());
+            exit_code = 1;
+            return false;
+        }
+    };
+    while (next_block()) {
         lock.process(iq.data(), iq.size());
         // Before the first lock the correction is 0 (nominal LNB); after a
         // loss it keeps the last estimate.
@@ -175,7 +279,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nbd: %.1f s of IQ in %.1f s, %.2fx real time\n", total / o.rate, wall,
                      total / o.rate / wall);
     }
+    if (pluto) {
+        try {
+            pluto->stop();  // gives the DMA back to the AD9363 for zynqrx / maia
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "nbd: stop: %s\n", e.what());
+            exit_code = 1;
+        }
+    }
     if (out && out != stdout) std::fclose(out);
-    if (in != stdin) std::fclose(in);
-    return 0;
+    if (in && in != stdin) std::fclose(in);
+    return exit_code;
 }

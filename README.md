@@ -53,10 +53,19 @@ Copier `nbd` et `nbsynth` sur `/mnt/jffs2/` (persistant), puis :
 /mnt/jffs2/nbsynth --seconds 30 > /tmp/test.cs16
 /mnt/jffs2/nbd --input /tmp/test.cs16 --output /dev/null --wisdom /mnt/jffs2/
 
-# 2. En direct, une fois le DDC Maia réglé à 768 kS/s autour de 10489,750 MHz
-#    et routé vers la DMA (prochaine étape : nbd le fera lui-même) :
-iio_readdev -u local: -b 4096 cf-ad9361-lpc voltage0 voltage1 |
-  /mnt/jffs2/nbd --center 10489750000 --freq 10489900000 --output /dev/null
+# 2. En direct : nbd règle l'AD9363 (LO 740,25 MHz, 3,072 MS/s, gain auto),
+#    le DDC Maia (-500 kHz, décimation 4 -> 768 kS/s), route le DDC vers la
+#    DMA et lit les IQ par iiod. Arrêter zynqrx et l'enregistreur Maia avant.
+/mnt/jffs2/nbd --source pluto --freq 10489900000 --output /dev/null --wisdom /mnt/jffs2/
+
+# Même chose depuis un PC du réseau (la carte en 192.168.2.1) :
+nbd --source pluto:192.168.2.1 --freq 10489900000 --output - | aplay -f S16_LE -r 48000
+```
+
+Options utiles en direct : `--gain 40` (gain manuel en dB, sinon
+`slow_attack`), `--lnb-lo` si le LNB n'est pas à 9750 MHz, `--duration 60`.
+À l'arrêt (Ctrl-C ou fin), `nbd` ferme le buffer et rend la DMA à l'AD9363,
+donc zynqrx et Maia retrouvent leur flux normal.
 ```
 
 `nbd` affiche chaque seconde l'état de la balise (searching, locked,
