@@ -155,7 +155,12 @@ Au-dessus du cadran, le spectre et le waterfall montrent la bande avec les
 balises, la fréquence d'écoute (trait rouge) et la bande passante du
 filtre. Toucher un signal centre le filtre dessus ; glisser à
 l'horizontale accorde comme un bouton. Vues : toute la bande, 100, 25 ou
-6 kHz (le zoom suit la fréquence). L'APK de debug est
+6 kHz (le zoom suit la fréquence).
+
+« Écouter » met d'abord la carte en mode NB par son MQTT (port 1883 :
+`cmd/nb/mode nb`, donc zynqrx en pause et nbd lancé), puis se connecte à
+`nbd`. La ligne « Carte » bascule entre NB et DATV depuis le téléphone et
+affiche le mode publié par la carte (`state/nb/mode`). L'APK de debug est
 produit par la CI.
 
 ## Licence

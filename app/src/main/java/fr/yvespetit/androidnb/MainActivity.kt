@@ -120,7 +120,7 @@ private fun MainScreen(c: NbConnection) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
             permissionError = null
-            c.connect("ws://$host:$port/")
+            c.connect(host, port.toIntOrNull() ?: 8073)
         } else {
             permissionError = "Android refuse l'accès au réseau local : autorise « Réseau local » pour QO-100 NB " +
                 "dans les réglages de l'appli, sinon la carte reste injoignable en Wi-Fi."
@@ -129,7 +129,7 @@ private fun MainScreen(c: NbConnection) {
     fun listen() {
         if (localNetworkGranted()) {
             permissionError = null
-            c.connect("ws://$host:$port/")
+            c.connect(host, port.toIntOrNull() ?: 8073)
         } else {
             permissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
         }
@@ -180,8 +180,26 @@ private fun MainScreen(c: NbConnection) {
         } else {
             OutlinedButton(onClick = { c.disconnect() }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
         }
+        // Board mode: NB (nbd, this app) or DATV (zynqrx, Dashboard)
+        if (c.link != NbConnection.Link.DISCONNECTED) {
+            val boardModes = listOf("nb" to "NB", "datv" to "DATV")
+            ChipRow("Carte", boardModes, boardModes.firstOrNull { it.first == c.boardMode }, { it.second }) {
+                c.setBoardMode(it.first)
+            }
+            if (!c.mqttUp) {
+                Text(
+                    "MQTT de la carte injoignable (port 1883) : bascule NB/DATV indisponible",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (c.boardMode == "datv") {
+                Text(
+                    "Carte en mode DATV : la réception NB reprend en choisissant NB.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        c.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        c.lastError?.takeIf { c.boardMode != "datv" }?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 
         // Band: spectrum and waterfall, tap or drag to tune
         val filterLow = status?.filterLowHz ?: 200

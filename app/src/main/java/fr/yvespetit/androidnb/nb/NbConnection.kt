@@ -26,6 +26,12 @@ class NbConnection {
     var stats by mutableStateOf(Stats())
         private set
 
+    /** Board mode from state/nb/mode ("nb" or "datv"), null while unknown. */
+    var boardMode by mutableStateOf<String?>(null)
+        private set
+    var mqttUp by mutableStateOf(false)
+        private set
+
     /** Waterfall rows; only touched on the main thread. */
     val waterfall = Waterfall()
     /** Bumped on every new waterfall row, so Compose redraws. */
@@ -49,21 +55,76 @@ class NbConnection {
     private var worker: Thread? = null
     private var player: OpusPlayer? = null
     private var volume = 1f
+    @Volatile private var mqtt: MqttLite? = null
+    private var mqttWorker: Thread? = null
 
-    fun connect(url: String) {
+    /**
+     * Listens to nbd on [host]:[port]. The board is first put in NB mode
+     * over its MQTT broker (nbctl.sh pauses zynqrx and starts nbd), then the
+     * WebSocket connects, retrying while nbd starts.
+     */
+    fun connect(host: String, port: Int) {
         disconnect()
         wanted = true
         lastError = null
-        worker = Thread({ loop(url) }, "nb-ws").apply { start() }
+        mqttWorker = Thread({ mqttLoop(host, requestNb = true) }, "nb-mqtt").apply { start() }
+        worker = Thread({ loop("ws://$host:$port/") }, "nb-ws").apply { start() }
     }
 
     fun disconnect() {
         wanted = false
         socket?.close()
+        mqtt?.close()
         worker?.join(2000)
+        mqttWorker?.join(2000)
         worker = null
+        mqttWorker = null
         stopAudio()
         link = Link.DISCONNECTED
+        mqttUp = false
+    }
+
+    /** Switches the board: "nb" starts nbd, "datv" hands the radio back to zynqrx. */
+    fun setBoardMode(mode: String) {
+        val m = mqtt ?: return
+        Thread { runCatching { m.publish("cmd/nb/mode", mode) } }.start()
+    }
+
+    private fun mqttLoop(host: String, requestNb: Boolean) {
+        var askNb = requestNb
+        while (wanted) {
+            try {
+                val m = MqttLite.connect(host, clientId = "android-nb-" + (System.nanoTime() % 100000))
+                mqtt = m
+                main.post { mqttUp = true }
+                m.subscribe("state/nb/mode")
+                if (askNb) {
+                    m.publish("cmd/nb/mode", "nb")
+                    askNb = false
+                }
+                m.setReadTimeout(MqttLite.KEEPALIVE_S * 1000 / 2)
+                while (wanted) {
+                    val msg = m.receive()
+                    if (msg == null) {
+                        m.ping()
+                        continue
+                    }
+                    if (msg.topic == "state/nb/mode") main.post { boardMode = msg.payload.trim() }
+                }
+            } catch (_: Exception) {
+                // Board unreachable or broker restarting: retry below.
+            } finally {
+                mqtt?.close()
+                mqtt = null
+                main.post { mqttUp = false }
+            }
+            if (!wanted) break
+            try {
+                Thread.sleep(RETRY_MS)
+            } catch (_: InterruptedException) {
+                break
+            }
+        }
     }
 
     fun setPrefillPackets(n: Int) {
