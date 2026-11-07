@@ -15,6 +15,17 @@ android {
         versionName = "0.1"
     }
 
+    // Fixed debug key, committed on purpose (it protects nothing): every CI
+    // build then updates the app on the phone instead of needing an uninstall.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildFeatures {
         compose = true
     }
