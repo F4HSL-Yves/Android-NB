@@ -56,15 +56,14 @@ class NbConnection {
     private var player: OpusPlayer? = null
     private var volume = 1f
     @Volatile private var mqtt: MqttLite? = null
-    @Volatile private var lastBoardMode: String? = null
     private var mqttWorker: Thread? = null
 
     /**
      * Listens to nbd on [host]:[port]. The board is first put in NB mode
      * over its MQTT broker (nbctl.sh pauses zynqrx and starts nbd), then the
-     * WebSocket connects, retrying while nbd starts. While listening, a DATV
-     * start from the Dashboard takes the radio (nbctl switches to datv) and
-     * the matching stop gives it back: the app then asks for NB again.
+     * WebSocket connects, retrying while nbd starts. A DATV start from any
+     * client takes the radio (nbctl switches to datv) and its stop gives it
+     * back (nbctl returns to nb); the app follows state/nb/mode.
      */
     fun connect(host: String, port: Int) {
         disconnect()
@@ -87,12 +86,6 @@ class NbConnection {
         mqttUp = false
     }
 
-    /** Switches the board: "nb" starts nbd, "datv" hands the radio back to zynqrx. */
-    fun requestBoardMode(mode: String) {
-        val m = mqtt ?: return
-        Thread { runCatching { m.publish("cmd/nb/mode", mode) } }.start()
-    }
-
     private fun mqttLoop(host: String, requestNb: Boolean) {
         var askNb = requestNb
         while (wanted) {
@@ -101,9 +94,6 @@ class NbConnection {
                 mqtt = m
                 main.post { mqttUp = true }
                 m.subscribe("state/nb/mode")
-                // zynqrx's own state: when DATV reception stops (Webtioune
-                // stop button), the radio is free and the app takes it back.
-                m.subscribe("dt/zynqrx/process")
                 if (askNb) {
                     m.publish("cmd/nb/mode", "nb")
                     askNb = false
@@ -116,15 +106,7 @@ class NbConnection {
                         continue
                     }
                     val payload = msg.payload.trim()
-                    when (msg.topic) {
-                        "state/nb/mode" -> {
-                            lastBoardMode = payload
-                            main.post { boardMode = payload }
-                        }
-                        "dt/zynqrx/process" -> if (payload == "stop" && lastBoardMode == "datv") {
-                            m.publish("cmd/nb/mode", "nb")
-                        }
-                    }
+                    if (msg.topic == "state/nb/mode") main.post { boardMode = payload }
                 }
             } catch (_: Exception) {
                 // Board unreachable or broker restarting: retry below.

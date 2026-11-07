@@ -8,14 +8,15 @@
 #
 #   nbctl.sh nb | datv     switch now (and remember it for the next boot)
 #   nbctl.sh status        print the current mode
-#   nbctl.sh boot          at boot: restore the remembered mode, then listen
-#                          to MQTT (run from /mnt/jffs2/autorun.sh)
+#   nbctl.sh boot          at boot: start in nb mode (zynqrx idle), then
+#                          listen to MQTT (run from /mnt/jffs2/autorun.sh)
 #
 # MQTT (broker on the board, 127.0.0.1:1883):
 #   cmd/nb/mode   "nb" or "datv"        switch
 #   state/nb/mode "nb" or "datv"        current mode (retained)
-# A DATV start from the Dashboard (dt/zynqrx/process = start) while in nb
-# mode stops nbd and switches to datv, so the two never fight.
+# NB is the default mode. A DATV start from any client (Webtioune,
+# Android-DATV...: dt/zynqrx/process = start) stops nbd and switches to
+# datv, so the two never fight; the matching stop switches back to nb.
 #
 # Files live on the SD card (the root filesystem is in RAM and jffs2 is
 # almost full): /boot/nb/nbd, nb.conf, this script, the FFTW wisdom and the
@@ -27,7 +28,7 @@ MODE_FILE=$NB_DIR/mode
 RUN_FLAG=/tmp/nb.run
 LOG=/tmp/nbd.log
 NBD_ARGS="--source pluto --ws 8073"
-DEFAULT_MODE=datv
+BOOT_MODE=nb
 [ -f "$NB_DIR/nb.conf" ] && . "$NB_DIR/nb.conf"
 
 log() { echo "nbctl: $*"; logger -t nbctl "$*" 2>/dev/null; }
@@ -104,10 +105,8 @@ case "$1" in
 nb | datv) switch "$1" ;;
 status) current ;;
 boot)
-    mode=$(cat "$MODE_FILE" 2>/dev/null)
-    [ -n "$mode" ] || mode=$DEFAULT_MODE
-    # S97datv has already started zynqrx: nothing to do for DATV.
-    if [ "$mode" = nb ]; then switch nb; else pub state/nb/mode datv; fi
+    # S97datv has already started zynqrx, idle: NB takes the radio.
+    if [ "$BOOT_MODE" = datv ]; then switch datv; else switch nb; fi
     # Listen for mode changes and for DATV starts, and come back if
     # mosquitto restarts.
     (
@@ -119,9 +118,14 @@ boot)
                         if [ "$m" = "$(current)" ]; then pub state/nb/mode "$m"; else switch "$m"; fi
                         ;;
                     dt/zynqrx/process)
+                        # Our own pause_zynqrx "stop" arrives once the mode is
+                        # already nb, so it never switches twice.
                         if [ "$m" = start ] && [ "$(current)" = nb ]; then
-                            log "DATV started from the Dashboard: leaving nb"
+                            log "DATV reception started: leaving nb"
                             switch datv
+                        elif [ "$m" = stop ] && [ "$(current)" = datv ]; then
+                            log "DATV reception stopped: back to nb"
+                            switch nb
                         fi
                         ;;
                     esac

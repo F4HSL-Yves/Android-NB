@@ -128,10 +128,11 @@ scp -O board/autorun.sh root@192.168.1.125:/mnt/jffs2/autorun.sh
 
 Une seule application peut tenir le récepteur : `nbctl.sh` bascule entre
 la réception DATV (`zynqrx`) et la bande étroite (`nbd`), relance `nbd`
-s'il s'arrête, et retient le mode pour le prochain démarrage. `zynqrx`
+s'il s'arrête. `zynqrx`
 reste lancé comme sur le firmware d'origine : en `nb` il est mis en pause
-(`cmd/zynqrx/process stop`), et un start DATV depuis le Dashboard pendant
-que `nbd` tourne arrête `nbd` et repasse en `datv`.
+(`cmd/zynqrx/process stop`). NB est le mode par défaut, y compris au
+démarrage : un start DATV (Webtioune, Android-DATV…) arrête `nbd` et passe
+en `datv`, et le stop correspondant revient en `nb`, même téléphone éteint.
 
 ```sh
 mosquitto_pub -h 192.168.1.125 -t cmd/nb/mode -m nb     # bande étroite
@@ -159,9 +160,9 @@ l'horizontale accorde comme un bouton. Vues : toute la bande, 100, 25 ou
 
 « Écouter » met d'abord la carte en mode NB par son MQTT (port 1883 :
 `cmd/nb/mode nb`, donc zynqrx en pause et nbd lancé), puis se connecte à
-`nbd`. Pendant l'écoute, un start DATV depuis le Webtioune prend la radio
-(la carte passe en `datv`) et l'appli l'affiche ; au stop du Webtioune
-(`dt/zynqrx/process stop`), l'appli redemande le mode NB et se reconnecte. L'APK de debug est
+`nbd`. Un start DATV (Webtioune, Android-DATV) prend la radio et l'appli
+affiche « Réception DATV en cours » ; au stop, la carte revient d'elle-même
+en NB et l'appli se reconnecte. L'APK de debug est
 produit par la CI.
 
 ## Licence
