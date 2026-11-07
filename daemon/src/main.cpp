@@ -10,6 +10,9 @@
 //   nbd --source pluto --freq 10489900000 --output - | aplay ...
 // From a PC or phone on the same network: --source pluto:192.168.2.1
 //
+// Phone app: --ws 8073 serves Opus audio, status and commands over a
+// WebSocket (see protocol.h).
+//
 // Offline, from a recording or stdin (768 kS/s around 10489.750 MHz):
 //   nbd --input capture.cs16 --freq 10489900000 --output audio.s16
 #include <atomic>
@@ -23,10 +26,14 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "beacon_lock.h"
+#include "opus_audio.h"
 #include "pluto_source.h"
+#include "protocol.h"
+#include "ws_server.h"
 #include "wdsp_rx.h"
 
 namespace {
@@ -46,6 +53,13 @@ struct Options {
     std::string source;  // empty: --input; "pluto" or "pluto:HOST"
     nb::PlutoConfig pluto;
     double duration_s = 0.0;  // 0: until stopped
+    // Phone app
+    int ws_port = 0;  // 0: no WebSocket server
+    std::string ws_bind = "0.0.0.0";
+    int bitrate = 16000;
+    int opus_complexity = 5;
+    bool realtime = false;  // pace a file input like the live stream
+    bool loop = false;      // restart a file input at its end
 };
 
 std::atomic<bool> g_stop{false};
@@ -61,6 +75,12 @@ void usage() {
                  "  --lo-offset HZ   AD9363 LO above the centre, keeps DC out (default 500000)\n"
                  "  --gain DB|MODE   manual gain in dB, or slow_attack/fast_attack/hybrid (default slow_attack)\n"
                  "  --duration S     stop after S seconds of IQ (default: until Ctrl-C)\n"
+                 "  --ws PORT        WebSocket server for the phone app (Opus audio, status, commands)\n"
+                 "  --ws-bind ADDR   address to listen on (default 0.0.0.0)\n"
+                 "  --bitrate BPS    Opus bitrate (default 16000)\n"
+                 "  --opus-complexity N  0..10 (default 5, lower saves CPU on the board)\n"
+                 "  --realtime       read a file input at the real sample rate\n"
+                 "  --loop           restart a file input at its end\n"
                  "  --input FILE     IQ input, '-' for stdin (default -)\n"
                  "  --format F       cs16 (default, 12-bit in int16) or cf32\n"
                  "  --rate HZ        IQ sample rate (default 768000)\n"
@@ -94,6 +114,12 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--wisdom") o.wisdom_dir = next("--wisdom");
         else if (a == "--quiet") o.quiet = true;
         else if (a == "--source") o.source = next("--source");
+        else if (a == "--ws") o.ws_port = std::atoi(next("--ws"));
+        else if (a == "--ws-bind") o.ws_bind = next("--ws-bind");
+        else if (a == "--bitrate") o.bitrate = std::atoi(next("--bitrate"));
+        else if (a == "--opus-complexity") o.opus_complexity = std::atoi(next("--opus-complexity"));
+        else if (a == "--realtime") o.realtime = true;
+        else if (a == "--loop") o.loop = true;
         else if (a == "--iiod-port") o.pluto.iiod_port = std::atoi(next("--iiod-port"));
         else if (a == "--http-port") o.pluto.http_port = std::atoi(next("--http-port"));
         else if (a == "--lnb-lo") o.pluto.lnb_lo_hz = std::atof(next("--lnb-lo"));
@@ -182,10 +208,10 @@ int main(int argc, char** argv) {
     const bool live = !o.source.empty();
     std::unique_ptr<nb::PlutoSource> pluto;
     std::unique_ptr<LiveReader> live_reader;
+    std::signal(SIGINT, on_signal);
+    std::signal(SIGTERM, on_signal);
+    std::signal(SIGPIPE, on_signal);
     if (live) {
-        std::signal(SIGINT, on_signal);
-        std::signal(SIGTERM, on_signal);
-        std::signal(SIGPIPE, on_signal);
         try {
             pluto = std::make_unique<nb::PlutoSource>(o.pluto);
             pluto->start();
@@ -227,7 +253,60 @@ int main(int argc, char** argv) {
 
     const int block = 4096;
     nb::WdspRx rx(0, static_cast<int>(o.rate), block);
-    const double station_offset = o.freq_hz - o.center_hz;
+    double station_offset = o.freq_hz - o.center_hz;
+    double filter_low = 200.0, filter_high = 2800.0;
+    int agc = 3;
+    // Keep the station and its passband inside the IQ bandwidth.
+    const double min_freq = o.center_hz - o.rate / 2 + 3000.0;
+    const double max_freq = o.center_hz + o.rate / 2 - 6000.0;
+
+    std::unique_ptr<nb::WsServer> ws;
+    std::unique_ptr<nb::OpusAudio> opus;
+    uint16_t audio_seq = 0;
+    bool opus_idle = true;
+    if (o.ws_port > 0) {
+        try {
+            opus = std::make_unique<nb::OpusAudio>(o.bitrate, o.opus_complexity);
+            ws = std::make_unique<nb::WsServer>();
+            ws->set_hello(nb::hello_json(o.center_hz, o.rate, min_freq, max_freq, live ? o.source : "file"));
+            ws->start(o.ws_bind, o.ws_port);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "nbd: %s\n", e.what());
+            return 1;
+        }
+        if (!o.quiet) std::fprintf(stderr, "nbd: WebSocket on %s:%d\n", o.ws_bind.c_str(), ws->port());
+    }
+    auto apply_commands = [&]() {
+        std::string text, error;
+        while (ws && ws->next_command(text)) {
+            error.clear();
+            const nb::Command c = nb::parse_command(text, error);
+            switch (c.type) {
+            case nb::Command::Freq:
+                if (c.a < min_freq || c.a > max_freq) error = "freq outside the received band";
+                else station_offset = c.a - o.center_hz;
+                break;
+            case nb::Command::Filter:
+                filter_low = c.a;
+                filter_high = c.b;
+                rx.set_usb(filter_low, filter_high);
+                break;
+            case nb::Command::Agc:
+                agc = static_cast<int>(c.a);
+                rx.set_agc(agc);
+                break;
+            case nb::Command::Bitrate:
+                opus->set_bitrate(static_cast<int>(c.a));
+                break;
+            case nb::Command::None:
+                break;
+            }
+            if (!error.empty()) {
+                ws->broadcast_text("{\"type\":\"error\",\"message\":\"" + error + "\"}");
+                if (!o.quiet) std::fprintf(stderr, "nbd: command refused: %s\n", error.c_str());
+            }
+        }
+    };
 
     const auto wall_start = std::chrono::steady_clock::now();
     std::vector<nb::cf> iq;
@@ -239,7 +318,11 @@ int main(int argc, char** argv) {
     int exit_code = 0;
     auto next_block = [&]() -> bool {
         if (total >= max_samples || g_stop) return false;
-        if (!live) return read_file_block(in, o.format, iq, block);
+        if (!live) {
+            if (read_file_block(in, o.format, iq, block)) return true;
+            if (!o.loop || in == stdin || std::fseek(in, 0, SEEK_SET) != 0) return false;
+            return read_file_block(in, o.format, iq, block);
+        }
         try {
             return live_reader->read(iq, block);
         } catch (const std::exception& e) {
@@ -249,6 +332,7 @@ int main(int argc, char** argv) {
         }
     };
     while (next_block()) {
+        apply_commands();
         lock.process(iq.data(), iq.size());
         // Before the first lock the correction is 0 (nominal LNB); after a
         // loss it keeps the last estimate.
@@ -263,14 +347,47 @@ int main(int argc, char** argv) {
             }
             std::fwrite(pcm.data(), sizeof(int16_t), pcm.size(), out);
         }
+        if (ws && ws->clients() > 0) {
+            opus_idle = false;
+            opus->push(audio.data(), audio.size(),
+                       [&](const std::string& packet) { ws->broadcast_audio(nb::audio_packet(audio_seq++, packet)); });
+        } else if (opus && !opus_idle) {
+            opus->reset();
+            opus_idle = true;
+        }
         total += iq.size();
         const double t = total / o.rate;
-        if (!o.quiet && t >= next_report) {
-            const auto st = lock.status();
-            std::fprintf(stderr, "t=%7.1f s  beacon %-9s  correction %+10.1f Hz  drift %+6.2f Hz/s  snr %5.1f dB  S %6.1f dB\n",
-                         t, nb::to_string(st.state), st.correction_hz, st.drift_hz_per_s, st.acquisition_snr_db,
-                         rx.signal_db());
+        if (o.realtime && !live) {
+            const auto due = wall_start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                              std::chrono::duration<double>(t));
+            std::this_thread::sleep_until(due);
+        }
+        if (t >= next_report) {
             next_report += 1.0;
+            const auto st = lock.status();
+            if (ws) {
+                nb::StatusInfo si;
+                si.freq_hz = o.center_hz + station_offset;
+                si.beacon = nb::to_string(st.state);
+                si.correction_hz = st.correction_hz;
+                si.drift_hz_per_s = st.drift_hz_per_s;
+                si.snr_db = st.acquisition_snr_db;
+                si.signal_db = rx.signal_db();
+                si.filter_low = filter_low;
+                si.filter_high = filter_high;
+                si.agc = agc;
+                si.bitrate = opus->bitrate();
+                si.clients = ws->clients();
+                si.dropped = ws->dropped_audio_frames();
+                si.uptime_s = t;
+                ws->broadcast_text(nb::status_json(si));
+            }
+            if (!o.quiet)
+                std::fprintf(stderr,
+                             "t=%7.1f s  beacon %-9s  correction %+10.1f Hz  drift %+6.2f Hz/s  snr %5.1f dB  S %6.1f dB"
+                             "%s\n",
+                             t, nb::to_string(st.state), st.correction_hz, st.drift_hz_per_s, st.acquisition_snr_db,
+                             rx.signal_db(), ws ? ("  clients " + std::to_string(ws->clients())).c_str() : "");
         }
     }
     const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
@@ -279,6 +396,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nbd: %.1f s of IQ in %.1f s, %.2fx real time\n", total / o.rate, wall,
                      total / o.rate / wall);
     }
+    if (ws) ws->stop();
     if (pluto) {
         try {
             pluto->stop();  // gives the DMA back to the AD9363 for zynqrx / maia

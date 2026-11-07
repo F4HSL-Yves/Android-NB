@@ -22,6 +22,8 @@ public:
     void set_offset_hz(double hz);
     // Upper sideband audio between low_hz and high_hz.
     void set_usb(double low_hz, double high_hz);
+    // 0 off, 1 long, 2 slow, 3 medium (default), 4 fast.
+    void set_agc(int mode);
 
     // in: exactly in_size() samples. Appends 48 kHz mono audio to `audio`.
     void process(const cf* in, std::vector<float>& audio);

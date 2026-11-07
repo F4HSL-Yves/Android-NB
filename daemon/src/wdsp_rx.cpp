@@ -55,6 +55,8 @@ void WdspRx::set_offset_hz(double hz) {
     SetRXAShiftFreq(channel_, -hz);
 }
 
+void WdspRx::set_agc(int mode) { SetRXAAGCMode(channel_, mode); }
+
 void WdspRx::set_usb(double low_hz, double high_hz) {
     SetRXAMode(channel_, kModeUsb);
     SetRXABandpassFreqs(channel_, low_hz, high_hz);

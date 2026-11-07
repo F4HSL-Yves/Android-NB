@@ -28,7 +28,7 @@ le réseau, ce qui permet le trafic à distance en 4G/5G (environ 150 kbit/s).
 
 ```sh
 git submodule update --init
-sudo apt-get install libfftw3-dev
+sudo apt-get install libfftw3-dev libopus-dev
 cmake -S daemon -B build && cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
@@ -37,7 +37,7 @@ Pour la carte (binaire statique ARMv7, Cortex-A9) depuis Ubuntu 24.04 :
 
 ```sh
 sudo dpkg --add-architecture armhf   # + dépôt ports.ubuntu.com pour armhf
-sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libfftw3-dev:armhf
+sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libfftw3-dev:armhf libopus-dev:armhf
 cmake -S daemon -B build-arm -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armhf.cmake -DNBD_BUILD_TESTS=OFF
 cmake --build build-arm -j
 ```
@@ -72,6 +72,26 @@ donc zynqrx et Maia retrouvent leur flux normal.
 holdover), la correction en Hz et la dérive en Hz/s. Le premier lancement
 avec `--wisdom` calcule les plans FFTW de WDSP, ce qui peut prendre plusieurs
 minutes sur le Cortex-A9 ; ils sont ensuite réutilisés.
+
+## Téléphone : audio et commandes par WebSocket
+
+Avec `--ws 8073`, `nbd` sert l'audio démodulé en Opus (48 kHz mono, paquets
+de 20 ms, 16 kbit/s par défaut, réglable avec `--bitrate`), l'état de la
+balise chaque seconde en JSON, et accepte les commandes de l'application :
+fréquence, filtre, AGC, débit. Le protocole est décrit dans
+`daemon/src/protocol.h`. Si la liaison cellulaire ralentit, `nbd` jette
+l'audio en retard plutôt que d'accumuler du délai.
+
+```sh
+/mnt/jffs2/nbd --source pluto --ws 8073 --wisdom /mnt/jffs2/
+
+# Vérification depuis un PC (Python standard, rien à installer) :
+python3 daemon/tools/nbws_probe.py ws://192.168.2.1:8073 --freq 10489900000
+
+# Sans carte, pour développer l'application : un fichier rejoué en temps réel.
+nbsynth --seconds 60 > test.cs16
+nbd --input test.cs16 --realtime --loop --ws 8073
+```
 
 ## Licence
 
