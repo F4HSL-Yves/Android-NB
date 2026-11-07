@@ -60,6 +60,7 @@ struct Options {
     int opus_complexity = 5;
     bool realtime = false;  // pace a file input like the live stream
     bool loop = false;      // restart a file input at its end
+    int dsp_size = 2048;    // WDSP block at 48 kHz
 };
 
 std::atomic<bool> g_stop{false};
@@ -79,6 +80,7 @@ void usage() {
                  "  --ws-bind ADDR   address to listen on (default 0.0.0.0)\n"
                  "  --bitrate BPS    Opus bitrate (default 16000)\n"
                  "  --opus-complexity N  0..10 (default 5, lower saves CPU on the board)\n"
+                 "  --dsp-size N     WDSP block at 48 kHz, 1024..8192 (default 2048; smaller = less delay)\n"
                  "  --realtime       read a file input at the real sample rate\n"
                  "  --loop           restart a file input at its end\n"
                  "  --input FILE     IQ input, '-' for stdin (default -)\n"
@@ -120,6 +122,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--opus-complexity") o.opus_complexity = std::atoi(next("--opus-complexity"));
         else if (a == "--realtime") o.realtime = true;
         else if (a == "--loop") o.loop = true;
+        else if (a == "--dsp-size") o.dsp_size = std::atoi(next("--dsp-size"));
         else if (a == "--iiod-port") o.pluto.iiod_port = std::atoi(next("--iiod-port"));
         else if (a == "--http-port") o.pluto.http_port = std::atoi(next("--http-port"));
         else if (a == "--lnb-lo") o.pluto.lnb_lo_hz = std::atof(next("--lnb-lo"));
@@ -252,7 +255,18 @@ int main(int argc, char** argv) {
     nb::BeaconLock lock(cfg);
 
     const int block = 4096;
-    nb::WdspRx rx(0, static_cast<int>(o.rate), block);
+    // Demodulator front end: when the IQ rate is a multiple of 48 kHz, shift
+    // the station to 0 Hz and decimate to 48 kS/s before WDSP. WDSP then runs
+    // without its resampler, which on the Cortex-A9 (no double-precision
+    // SIMD) is the difference between keeping up and not.
+    const unsigned fe_decim =
+        (std::fmod(o.rate, 48000.0) == 0.0 && o.rate > 48000.0) ? static_cast<unsigned>(o.rate / 48000.0) : 1;
+    const bool use_frontend = fe_decim > 1 && block % static_cast<int>(fe_decim) == 0;
+    std::unique_ptr<nb::Downconverter> frontend;
+    if (use_frontend) frontend = std::make_unique<nb::Downconverter>(o.rate, fe_decim, 6500.0);
+    nb::WdspRx rx(0, use_frontend ? 48000 : static_cast<int>(o.rate),
+                  use_frontend ? block / static_cast<int>(fe_decim) : block, o.dsp_size);
+    std::vector<nb::cf> narrow;
     double station_offset = o.freq_hz - o.center_hz;
     double filter_low = 200.0, filter_high = 2800.0;
     int agc = 3;
@@ -336,9 +350,16 @@ int main(int argc, char** argv) {
         lock.process(iq.data(), iq.size());
         // Before the first lock the correction is 0 (nominal LNB); after a
         // loss it keeps the last estimate.
-        rx.set_offset_hz(station_offset + lock.correction_hz());
         audio.clear();
-        rx.process(iq.data(), audio);
+        if (frontend) {
+            frontend->set_frequency(station_offset + lock.correction_hz());
+            narrow.clear();
+            frontend->process(iq.data(), iq.size(), narrow);
+            rx.process(narrow.data(), audio);
+        } else {
+            rx.set_offset_hz(station_offset + lock.correction_hz());
+            rx.process(iq.data(), audio);
+        }
         if (out) {
             pcm.resize(audio.size());
             for (size_t i = 0; i < audio.size(); ++i) {

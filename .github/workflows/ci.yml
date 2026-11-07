@@ -42,7 +42,7 @@ jobs:
         run: |
           cmake -S daemon -B build-arm -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armhf.cmake -DNBD_BUILD_TESTS=OFF
           cmake --build build-arm -j"$(nproc)"
-          arm-linux-gnueabihf-strip build-arm/nbd build-arm/nbsynth
+          arm-linux-gnueabihf-strip build-arm/nbd build-arm/nbsynth build-arm/nbbench
           file build-arm/nbd
       - uses: actions/upload-artifact@v4
         with:
@@ -50,6 +50,7 @@ jobs:
           path: |
             build-arm/nbd
             build-arm/nbsynth
+            build-arm/nbbench
 
   android:
     name: Android app

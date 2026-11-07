@@ -23,13 +23,6 @@ size_t next_pow2(size_t n) {
     return p;
 }
 
-// FIR decimator whose output is free of aliasing within +/- passband.
-FirDecimator make_stage(double in_rate, unsigned decim, double passband) {
-    const double out_rate = in_rate / decim;
-    const double stop = out_rate - passband;
-    const size_t taps = lowpass_taps((stop - passband) / in_rate);
-    return FirDecimator(design_lowpass(taps, 0.5 * (passband + stop) / in_rate), decim);
-}
 }  // namespace
 
 const char* to_string(LockState s) {
@@ -49,7 +42,7 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     unsigned acq_decim = static_cast<unsigned>(std::floor(fs / (2.5 * w)));
     if (acq_decim < 1) acq_decim = 1;
     acq_rate_ = fs / acq_decim;
-    acq_fir_ = make_stage(fs, acq_decim, 1.05 * w);
+    acq_fir_ = make_decimator(fs, acq_decim, 1.05 * w);
     acq_fft_size_ = next_pow2(static_cast<size_t>(acq_rate_));  // ~1 s
     acq_nco_.set_frequency(cfg_.beacon_offset_hz);
 
@@ -59,8 +52,8 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     unsigned d2 = static_cast<unsigned>(std::lround(rate1 / 1000.0));
     if (d2 < 1) d2 = 1;
     trk_rate_ = rate1 / d2;
-    trk_fir1_ = make_stage(fs, d1, 300.0);
-    trk_fir2_ = make_stage(rate1, d2, 150.0);
+    trk_fir1_ = make_decimator(fs, d1, 300.0);
+    trk_fir2_ = make_decimator(rate1, d2, 150.0);
     block_len_ = static_cast<unsigned>(std::lround(trk_rate_ * 0.04));
     if (block_len_ < 4) block_len_ = 4;
 

@@ -12,7 +12,8 @@ class WdspRx {
 public:
     // in_size: IQ samples per call to process(); in_size * 48000 / in_rate
     // must be a whole number.
-    WdspRx(int channel, int in_rate, int in_size);
+    // dsp_size: WDSP processing block at 48 kHz (filter resolution vs delay).
+    WdspRx(int channel, int in_rate, int in_size, int dsp_size = 4096);
     ~WdspRx();
     WdspRx(const WdspRx&) = delete;
     WdspRx& operator=(const WdspRx&) = delete;

@@ -54,6 +54,26 @@ private:
     unsigned phase_ = 0;
 };
 
+// Low-pass decimator whose output is free of aliasing within +/- passband_hz.
+FirDecimator make_decimator(double in_rate, unsigned decim, double passband_hz);
+
+// Shifts a station to 0 Hz and decimates the wide IQ stream around it, so
+// that the demodulator works at a low rate (768 kS/s -> 48 kS/s).
+class Downconverter {
+public:
+    Downconverter(double in_rate, unsigned decim, double passband_hz);
+    void set_frequency(double hz) { nco_.set_frequency(hz); }
+    // Appends n / decim samples (n a multiple of decim keeps blocks exact).
+    void process(const cf* in, size_t n, std::vector<cf>& out);
+    double out_rate() const { return out_rate_; }
+
+private:
+    Nco nco_;
+    FirDecimator fir_;
+    std::vector<cf> mixed_;
+    double out_rate_;
+};
+
 // In-place iterative radix-2 FFT. a.size() must be a power of two.
 void fft_inplace(std::vector<std::complex<double>>& a);
 

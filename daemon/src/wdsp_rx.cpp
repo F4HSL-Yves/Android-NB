@@ -16,6 +16,7 @@ void SetRXABandpassFreqs(int channel, double f_low, double f_high);
 void SetRXAAGCMode(int channel, int mode);
 void SetRXAShiftRun(int channel, int run);
 void SetRXAShiftFreq(int channel, double fshift);
+void SetRXAPanelGain1(int channel, double gain);
 double GetRXAMeter(int channel, int mt);
 void WDSPwisdom(char* directory);
 }
@@ -29,7 +30,7 @@ constexpr int kAgcMedium = 3;
 constexpr int kMeterSignalAverage = 1;  // RXA_S_AV
 }  // namespace
 
-WdspRx::WdspRx(int channel, int in_rate, int in_size)
+WdspRx::WdspRx(int channel, int in_rate, int in_size, int dsp_size)
     : channel_(channel), in_size_(in_size) {
     if (in_size <= 0 || (static_cast<long>(in_size) * kAudioRate) % in_rate != 0) {
         throw std::invalid_argument("WdspRx: in_size * 48000 must be a multiple of in_rate");
@@ -40,12 +41,15 @@ WdspRx::WdspRx(int channel, int in_rate, int in_size)
 
     // type 0 = receive, state 1 = running, bfo 1 = fexchange0 waits for
     // output, which keeps the offline tool strictly sequential.
-    OpenChannel(channel_, in_size_, 4096, in_rate, kAudioRate, kAudioRate, 0, 1, 0.0, 0.010, 0.0, 0.010, 1);
+    OpenChannel(channel_, in_size_, dsp_size, in_rate, kAudioRate, kAudioRate, 0, 1, 0.0, 0.010, 0.0, 0.010, 1);
     SetRXAMode(channel_, kModeUsb);
     SetRXABandpassFreqs(channel_, 200.0, 2800.0);
     SetRXAAGCMode(channel_, kAgcMedium);
     SetRXAShiftRun(channel_, 1);
     SetRXAShiftFreq(channel_, 0.0);
+    // The AGC drives peaks to about 1.0 and beyond; leave headroom so the
+    // 16-bit and Opus outputs do not clip.
+    SetRXAPanelGain1(channel_, 0.5);
 }
 
 WdspRx::~WdspRx() { CloseChannel(channel_); }

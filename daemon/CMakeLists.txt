@@ -18,7 +18,10 @@ install(TARGETS nbsynth RUNTIME DESTINATION bin)
 # Core DSP: no external dependency, unit tested on any host.
 add_library(nbcore STATIC src/dsp.cpp src/beacon_lock.cpp)
 target_include_directories(nbcore PUBLIC src)
-target_compile_options(nbcore PRIVATE -Wall -Wextra)
+# Fast float math: lets GCC vectorize the FIR loops (NEON on the Zynq, which
+# is not IEEE compliant) and inline complex products. The DSP never relies
+# on NaN or infinity.
+target_compile_options(nbcore PRIVATE -Wall -Wextra -O3 -ffast-math)
 
 # Board access over TCP: iiod (AD9363, DMA) and maia-httpd (DDC).
 add_library(nbpluto STATIC src/iiod_client.cpp src/http_client.cpp src/pluto_source.cpp)
@@ -60,6 +63,10 @@ if(NBD_WITH_WDSP)
   target_link_libraries(nbd PRIVATE nbnet wdsp)
   target_compile_options(nbd PRIVATE -Wall -Wextra)
   install(TARGETS nbd RUNTIME DESTINATION bin)
+
+  add_executable(nbbench tools/nbbench.cpp src/wdsp_rx.cpp)
+  target_link_libraries(nbbench PRIVATE nbnet wdsp)
+  install(TARGETS nbbench RUNTIME DESTINATION bin)
 
   if(NBD_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
     add_executable(test_pipeline tests/test_pipeline.cpp src/wdsp_rx.cpp)

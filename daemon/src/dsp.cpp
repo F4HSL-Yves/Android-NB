@@ -91,6 +91,22 @@ void FirDecimator::process(const cf* in, size_t n, std::vector<cf>& out) {
     }
 }
 
+FirDecimator make_decimator(double in_rate, unsigned decim, double passband_hz) {
+    const double out_rate = in_rate / decim;
+    const double stop = out_rate - passband_hz;
+    const size_t taps = lowpass_taps((stop - passband_hz) / in_rate);
+    return FirDecimator(design_lowpass(taps, 0.5 * (passband_hz + stop) / in_rate), decim);
+}
+
+Downconverter::Downconverter(double in_rate, unsigned decim, double passband_hz)
+    : nco_(in_rate), fir_(make_decimator(in_rate, decim, passband_hz)), out_rate_(in_rate / decim) {}
+
+void Downconverter::process(const cf* in, size_t n, std::vector<cf>& out) {
+    mixed_.resize(n);
+    nco_.mix_down(in, mixed_.data(), n);
+    fir_.process(mixed_.data(), n, out);
+}
+
 void fft_inplace(std::vector<std::complex<double>>& a) {
     const size_t n = a.size();
     if (n == 0 || (n & (n - 1)) != 0) throw std::invalid_argument("fft size must be a power of two");
