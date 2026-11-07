@@ -1,7 +1,10 @@
 #!/bin/sh
 # QO-100 NB on a Tezuka board (FishBall 7020 / Pluto): switches the radio
 # between DATV reception (zynqrx) and the narrowband receiver (nbd).
-# Only one of them can own the AD9363 at a time.
+# Only one of them can own the AD9363 at a time. zynqrx stays running, as
+# the firmware starts it; it only holds the radio between its own MQTT
+# "process start" and "process stop", so the switch pauses it instead of
+# killing it (tested: an idle zynqrx leaves nbd alone).
 #
 #   nbctl.sh nb | datv     switch now (and remember it for the next boot)
 #   nbctl.sh status        print the current mode
@@ -11,6 +14,8 @@
 # MQTT (broker on the board, 127.0.0.1:1883):
 #   cmd/nb/mode   "nb" or "datv"        switch
 #   state/nb/mode "nb" or "datv"        current mode (retained)
+# A DATV start from the Dashboard (dt/zynqrx/process = start) while in nb
+# mode stops nbd and switches to datv, so the two never fight.
 #
 # Files live on the SD card (the root filesystem is in RAM and jffs2 is
 # almost full): /boot/nb/nbd, nb.conf, this script, the FFTW wisdom and the
@@ -41,13 +46,18 @@ stop_nbd() {
     wait_gone nbd 10
 }
 
-stop_zynqrx() {
-    killall zynqrx 2>/dev/null
-    wait_gone zynqrx 10
+ensure_zynqrx() {  # running but idle, as /etc/init.d/S97datv leaves it
+    pidof zynqrx >/dev/null 2>&1 || AUTOSTART=0 /usr/bin/start_zynqrx >/dev/null 2>&1
+}
+
+pause_zynqrx() {  # zynqrx gives the radio back on "process stop"
+    pidof zynqrx >/dev/null 2>&1 || return 0
+    mosquitto_pub -h 127.0.0.1 -t cmd/zynqrx/process -m stop 2>/dev/null
+    sleep 2
 }
 
 start_nb() {
-    stop_zynqrx
+    pause_zynqrx
     stop_nbd
     cp "$NB_DIR/nbd" /tmp/nbd && chmod 755 /tmp/nbd || { log "cannot copy $NB_DIR/nbd"; return 1; }
     touch "$RUN_FLAG"
@@ -67,8 +77,8 @@ start_nb() {
 
 start_datv() {
     stop_nbd
-    # Same as /etc/init.d/S97datv: zynqrx waits for its own MQTT start command.
-    AUTOSTART=0 /usr/bin/start_zynqrx >/dev/null 2>&1
+    # zynqrx waits for its own start (Dashboard, Webtioune page).
+    ensure_zynqrx
     log "mode datv (zynqrx)"
 }
 
@@ -84,7 +94,7 @@ switch() {
 }
 
 current() {
-    if [ -f "$RUN_FLAG" ] && pidof nbd >/dev/null 2>&1; then echo nb
+    if [ -f "$RUN_FLAG" ]; then echo nb
     elif pidof zynqrx >/dev/null 2>&1; then echo datv
     else echo none
     fi
@@ -98,13 +108,24 @@ boot)
     [ -n "$mode" ] || mode=$DEFAULT_MODE
     # S97datv has already started zynqrx: nothing to do for DATV.
     if [ "$mode" = nb ]; then switch nb; else pub state/nb/mode datv; fi
-    # Listen for mode changes, and come back if mosquitto restarts.
+    # Listen for mode changes and for DATV starts, and come back if
+    # mosquitto restarts.
     (
         while true; do
-            mosquitto_sub -h 127.0.0.1 -i nbctl -t cmd/nb/mode 2>/dev/null | while read -r m; do
-                [ "$m" = "$(current)" ] && { pub state/nb/mode "$m"; continue; }
-                switch "$m"
-            done
+            mosquitto_sub -h 127.0.0.1 -i nbctl -v -t cmd/nb/mode -t dt/zynqrx/process 2>/dev/null |
+                while read -r topic m; do
+                    case "$topic" in
+                    cmd/nb/mode)
+                        if [ "$m" = "$(current)" ]; then pub state/nb/mode "$m"; else switch "$m"; fi
+                        ;;
+                    dt/zynqrx/process)
+                        if [ "$m" = start ] && [ "$(current)" = nb ]; then
+                            log "DATV started from the Dashboard: leaving nb"
+                            switch datv
+                        fi
+                        ;;
+                    esac
+                done
             sleep 5
         done
     ) </dev/null >/dev/null 2>&1 &
