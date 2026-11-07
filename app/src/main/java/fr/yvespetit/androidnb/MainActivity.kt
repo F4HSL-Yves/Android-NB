@@ -184,7 +184,7 @@ private fun MainScreen(c: NbConnection) {
         if (c.link != NbConnection.Link.DISCONNECTED) {
             val boardModes = listOf("nb" to "NB", "datv" to "DATV")
             ChipRow("Carte", boardModes, boardModes.firstOrNull { it.first == c.boardMode }, { it.second }) {
-                c.setBoardMode(it.first)
+                c.requestBoardMode(it.first)
             }
             if (!c.mqttUp) {
                 Text(

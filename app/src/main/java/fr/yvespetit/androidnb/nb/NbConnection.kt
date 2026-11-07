@@ -85,7 +85,7 @@ class NbConnection {
     }
 
     /** Switches the board: "nb" starts nbd, "datv" hands the radio back to zynqrx. */
-    fun setBoardMode(mode: String) {
+    fun requestBoardMode(mode: String) {
         val m = mqtt ?: return
         Thread { runCatching { m.publish("cmd/nb/mode", mode) } }.start()
     }
