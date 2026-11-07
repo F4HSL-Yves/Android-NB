@@ -35,6 +35,7 @@ struct Scenario {
     double seconds = 40.0;
     bool keyed = true;                 // CW keying on/off
     double outage_from = -1.0, outage_to = -1.0;  // beacon absent in [from, to)
+    double step_at = -1.0, step_hz = 0.0;  // sudden frequency jump (XO trim, LNB)
 };
 
 struct Result {
@@ -81,7 +82,7 @@ Result run(const Scenario& sc) {
     for (size_t pos = 0; pos < total; pos += block) {
         for (size_t i = 0; i < block; ++i) {
             const double t = (pos + i) / sc.fs;
-            const double err = sc.lnb_error0 + sc.drift * t;
+            const double err = sc.lnb_error0 + sc.drift * t + (sc.step_at >= 0 && t >= sc.step_at ? sc.step_hz : 0.0);
             const double fb = sc.beacon_offset + err;
             ph_b += 2.0 * kPi * fb / sc.fs;
             ph_i += 2.0 * kPi * (fb + sc.interferer_offset) / sc.fs;
@@ -105,7 +106,9 @@ Result run(const Scenario& sc) {
         const bool outage = t >= sc.outage_from && t < sc.outage_to;
         if (outage && t > sc.outage_from + 6.0 && st.state == nb::LockState::Locked) r.locked_in_outage = true;
         if (t > 15.0 && st.state != nb::LockState::Searching) {
-            const double e = st.correction_hz - (sc.lnb_error0 + sc.drift * t);
+            const double truth = sc.lnb_error0 + sc.drift * t + (sc.step_at >= 0 && t >= sc.step_at ? sc.step_hz : 0.0);
+            const double e = st.correction_hz - truth;
+            if (sc.step_at >= 0 && t >= sc.step_at && t < sc.step_at + 1.0) continue;  // settling
             sum_sq += e * e;
             max_err = std::max(max_err, std::abs(e));
             ++n_err;
@@ -125,6 +128,20 @@ void report(const char* name, const Result& r) {
 }  // namespace
 
 int main() {
+    for (double step : {60.0, -45.0}) {
+        // The reference of the AD9363 (or the LNB) jumps by tens of Hz at
+        // 10 GHz: the lock must follow at once, without a holdover.
+        Scenario sc;
+        sc.step_at = 20.0;
+        sc.step_hz = step;
+        const Result r = run(sc);
+        char name[64];
+        std::snprintf(name, sizeof name, "frequency step %+.0f Hz", step);
+        report(name, r);
+        CHECK(!r.holdover_seen, "holdover after a %+.0f Hz step", step);
+        CHECK(r.rms_error < 2.0, "rms %.3f", r.rms_error);
+        CHECK(r.final_state == nb::LockState::Locked, "final state");
+    }
     {
         Scenario sc;
         const Result r = run(sc);

@@ -16,6 +16,11 @@ constexpr double kCoherenceGate = 0.7;
 // bigger is a passing signal, not the beacon moving.
 constexpr double kMaxLockedErrorHz = 25.0;
 constexpr double kMaxReacquireErrorHz = 100.0;
+// A step larger than kMaxLockedErrorHz (the AD9363 reference being trimmed,
+// an LNB jump) is accepted at once when this many coherent blocks in a row
+// agree on it within kStepAgreeHz: a carrier that moved, not an interferer.
+constexpr unsigned kStepBlocks = 5;  // 200 ms
+constexpr double kStepAgreeHz = 8.0;
 
 size_t next_pow2(size_t n) {
     size_t p = 1;
@@ -136,6 +141,7 @@ void BeaconLock::enter_tracking(double beacon_freq_hz) {
     prod_ = {0.0, 0.0};
     prod_mag_ = 0.0;
     block_count_ = 0;
+    step_count_ = 0;
     last_carrier_sample_ = samples_;
     state_ = LockState::Locked;
 }
@@ -164,6 +170,16 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
             if (std::abs(err) <= limit) {
                 loop_update(err);
                 last_carrier_sample_ = samples_;
+                step_count_ = 0;
+            } else if (std::abs(err) <= kMaxReacquireErrorHz) {
+                if (step_count_ > 0 && std::abs(err - step_sum_ / step_count_) > kStepAgreeHz) step_count_ = 0;
+                if (step_count_ == 0) step_sum_ = 0.0;
+                step_sum_ += err;
+                if (++step_count_ >= kStepBlocks) {
+                    freq_ += step_sum_ / step_count_;  // jump; the loop keeps its drift rate
+                    last_carrier_sample_ = samples_;
+                    step_count_ = 0;
+                }
             }
         }
         coast(dt);

@@ -98,6 +98,8 @@ private:
     std::complex<double> prod_{0.0, 0.0};
     double prod_mag_ = 0.0;
     unsigned block_count_ = 0;
+    unsigned step_count_ = 0;  // coherent blocks agreeing on a frequency step
+    double step_sum_ = 0.0;
     unsigned block_len_ = 40;
 
     // Loop state.
