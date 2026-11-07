@@ -188,20 +188,15 @@ private fun MainScreen(c: NbConnection) {
         } else {
             OutlinedButton(onClick = { c.disconnect() }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
         }
-        // Board mode: NB (nbd, this app) or DATV (zynqrx, Dashboard)
+        // Board mode: NB (nbd, this app) or DATV (zynqrx, started from the Dashboard)
         if (c.link != NbConnection.Link.DISCONNECTED) {
-            val boardModes = listOf("nb" to "NB", "datv" to "DATV")
-            ChipRow("Carte", boardModes, boardModes.firstOrNull { it.first == c.boardMode }, { it.second }) {
-                c.requestBoardMode(it.first)
-            }
-            if (!c.mqttUp) {
-                Text(
-                    "MQTT de la carte injoignable (port 1883) : bascule NB/DATV indisponible",
+            when {
+                !c.mqttUp -> Text(
+                    "MQTT de la carte injoignable (port 1883) : la carte ne peut pas être passée en NB",
                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
                 )
-            } else if (c.boardMode == "datv") {
-                Text(
-                    "Carte en mode DATV : la réception NB reprend en choisissant NB.",
+                c.boardMode == "datv" -> Text(
+                    "Réception DATV en cours (Webtioune) : la bande étroite reprendra à son arrêt.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

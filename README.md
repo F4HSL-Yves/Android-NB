@@ -159,8 +159,9 @@ l'horizontale accorde comme un bouton. Vues : toute la bande, 100, 25 ou
 
 « Écouter » met d'abord la carte en mode NB par son MQTT (port 1883 :
 `cmd/nb/mode nb`, donc zynqrx en pause et nbd lancé), puis se connecte à
-`nbd`. La ligne « Carte » bascule entre NB et DATV depuis le téléphone et
-affiche le mode publié par la carte (`state/nb/mode`). L'APK de debug est
+`nbd`. Pendant l'écoute, un start DATV depuis le Webtioune prend la radio
+(la carte passe en `datv`) et l'appli l'affiche ; au stop du Webtioune
+(`dt/zynqrx/process stop`), l'appli redemande le mode NB et se reconnecte. L'APK de debug est
 produit par la CI.
 
 ## Licence
