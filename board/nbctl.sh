@@ -58,6 +58,9 @@ pause_zynqrx() {  # zynqrx gives the radio back on "process stop"
 }
 
 start_nb() {
+    # Read nb.conf again: the boot listener runs for days and must follow
+    # changes made since (NBD_ARGS gaining --tx, for instance).
+    [ -f "$NB_DIR/nb.conf" ] && . "$NB_DIR/nb.conf"
     pause_zynqrx
     stop_nbd
     cp "$NB_DIR/nbd" /tmp/nbd && chmod 755 /tmp/nbd || { log "cannot copy $NB_DIR/nbd"; return 1; }
