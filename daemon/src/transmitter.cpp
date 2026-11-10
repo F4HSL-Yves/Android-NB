@@ -1,6 +1,8 @@
 #include "transmitter.h"
 
 #include <cmath>
+#include <pthread.h>
+#include <sched.h>
 #include <cstdio>
 #include <exception>
 #include <vector>
@@ -151,6 +153,15 @@ void Transmitter::finish(const std::string& state, const std::string& message, b
 }
 
 void Transmitter::run() {
+    // The DAC drains a block every 10.7 ms and the board's other work
+    // (receiver, firmware scripts) must not make it run dry: real-time
+    // priority when allowed (nbd runs as root on the board). The loop
+    // always sleeps on the DAC, and the kernel keeps 5 % for the rest.
+    {
+        sched_param sp{};
+        sp.sched_priority = 20;
+        pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+    }
     // The WDSP channel is opened once, here: its FFT plans take a moment.
     std::unique_ptr<WdspTx> wdsp;
     try {

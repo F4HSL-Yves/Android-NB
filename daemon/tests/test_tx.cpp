@@ -123,6 +123,15 @@ void test_upconverter() {
     CHECK(std::fabs(peak_freq(p, df) - 701500.0) < 2 * df, "shifted tone at %.0f Hz", peak_freq(p, df));
     const double img = level_at(p, df, -701500.0, 300), dc = level_at(p, df, 0.0, 300);
     CHECK(img < -80.0 && dc < -80.0, "image %.1f dB, DC %.1f dB", img, dc);
+    // Integer NCO: phase truncation spurs anywhere in the DAC band.
+    double spur = -400;
+    for (size_t i = 0; i < p.size(); ++i) {
+        double f = static_cast<double>(i) * df;
+        if (f >= fs / 2) f -= fs;
+        if (std::fabs(f - 701500.0) > 3000.0) spur = std::max(spur, p[i]);
+    }
+    std::printf("  worst spur %.1f dBc\n", spur);
+    CHECK(spur < -65.0, "worst spur %.1f dB", spur);
     bool threw = false;
     try {
         up2.set_offset_hz(1.5e6);

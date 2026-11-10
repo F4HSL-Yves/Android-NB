@@ -9,7 +9,6 @@ namespace nb {
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr float kInScale = 4096.0f;  // float +/-1 -> integer CIC input (13 bits)
-constexpr size_t kNcoBlock = 64;     // exact phase recomputed every kNcoBlock samples
 
 int16_t diff16(uint16_t a, uint16_t b) { return static_cast<int16_t>(static_cast<uint16_t>(a - b)); }
 }  // namespace
@@ -89,11 +88,28 @@ Upconverter::Upconverter(double out_rate, double full_scale)
     const double r = out_rate / kInRate;
     if (r < 2.0 || std::fabs(r - std::round(r)) > 1e-3)
         throw std::invalid_argument("Upconverter: the DAC rate must be a multiple of 48 kHz");
+    if (cic_.order() != 4) throw std::invalid_argument("Upconverter: the fused loop is for a 4th order CIC");
+    // Full scale at the last integrator, brought down to at most 16 bits.
+    const double top = kInScale * cic_.gain();
+    while (top / std::ldexp(1.0, static_cast<int>(pre_shift_)) > 65536.0) ++pre_shift_;
+    const double a_full = top / std::ldexp(1.0, static_cast<int>(pre_shift_));
+    // out = (a * table) >> 14, with full_scale * 32767 at a = a_full.
+    const double amp = full_scale_ * 32767.0 * 16384.0 / a_full;
+    if (amp > 32767.0) throw std::invalid_argument("Upconverter: NCO table overflow");
+    const size_t n = size_t{1} << kNcoBits;
+    nco_.resize(2 * n);
+    for (size_t i = 0; i < n; ++i) {
+        const double ph = 2.0 * kPi * static_cast<double>(i) / static_cast<double>(n);
+        nco_[2 * i] = static_cast<int16_t>(std::lrint(amp * std::cos(ph)));
+        nco_[2 * i + 1] = static_cast<int16_t>(std::lrint(amp * std::sin(ph)));
+    }
 }
 
 void Upconverter::set_offset_hz(double hz) {
     if (!(std::fabs(hz) < 0.45 * out_rate_)) throw std::invalid_argument("Upconverter: offset outside the DAC band");
     offset_ = hz;
+    const double c = hz / out_rate_;  // cycles per sample, |c| < 0.45
+    inc_ = static_cast<uint32_t>(static_cast<int64_t>(std::llround(c * 4294967296.0)));
 }
 
 void Upconverter::reset() {
@@ -102,8 +118,8 @@ void Upconverter::reset() {
 }
 
 void Upconverter::process(const cf* in, size_t n, std::vector<int16_t>& out) {
-    // Fused CIC (order 4) + NCO + int16, one pass at the DAC rate: this loop
-    // is the transmitter's main cost on the Cortex-A9.
+    // Fused CIC (order 4) + NCO + int16, one pass at the DAC rate and all in
+    // integers: this loop is the transmitter's main cost on the Cortex-A9.
     const unsigned R = cic_.ratio();
     in_i32_.resize(2 * n);
     for (size_t k = 0; k < n; ++k) {
@@ -119,52 +135,39 @@ void Upconverter::process(const cf* in, size_t n, std::vector<int16_t>& out) {
     const size_t base = out.size();
     out.resize(base + 2 * n * R);
     int16_t* o = out.data() + base;
-    const float k = static_cast<float>(full_scale_ * 32767.0 / (kInScale * cic_.gain()));
-    const double cycles_per_sample = offset_ / out_rate_;
-    const double w = 2.0 * kPi * cycles_per_sample;
-    const float sc = static_cast<float>(std::cos(w)), ss = static_cast<float>(std::sin(w));
+    const int16_t* tab = nco_.data();
+    const unsigned sh = pre_shift_;
+    constexpr unsigned kIdxShift = 32 - kNcoBits;
     uint32_t* gi = cic_.integ_i();
     uint32_t* gq = cic_.integ_q();
     uint32_t i0 = gi[0], i1 = gi[1], i2 = gi[2], i3 = gi[3];
     uint32_t q0 = gq[0], q1 = gq[1], q2 = gq[2], q3 = gq[3];
-    float rc = 1, rs = 0;
-    size_t until_resync = 0;
+    uint32_t ph = phase_;
+    const uint32_t inc = inc_;
     for (size_t j = 0; j < n; ++j) {
-        const uint32_t xi = static_cast<uint32_t>(wide_[2 * j]);
-        const uint32_t xq = static_cast<uint32_t>(wide_[2 * j + 1]);
+        i0 += static_cast<uint32_t>(wide_[2 * j]);
+        q0 += static_cast<uint32_t>(wide_[2 * j + 1]);
         for (unsigned r = 0; r < R; ++r) {
-            if (until_resync == 0) {
-                // Exact phase every kNcoBlock samples; the float rotator in between.
-                rc = static_cast<float>(std::cos(2.0 * kPi * phase_));
-                rs = static_cast<float>(std::sin(2.0 * kPi * phase_));
-                phase_ += cycles_per_sample * static_cast<double>(kNcoBlock);
-                phase_ -= std::floor(phase_);
-                until_resync = kNcoBlock;
-            }
-            --until_resync;
-            i0 += r == 0 ? xi : 0u;
-            q0 += r == 0 ? xq : 0u;
+            // The comb output enters once per input sample (above), then
+            // the first integrator holds it: same as feeding zeros.
             i1 += i0;
             q1 += q0;
             i2 += i1;
             q2 += q1;
             i3 += i2;
             q3 += q2;
-            const float fi = static_cast<float>(static_cast<int32_t>(i3)) * k;
-            const float fq = static_cast<float>(static_cast<int32_t>(q3)) * k;
-            const float yi = fi * rc - fq * rs;
-            const float yq = fi * rs + fq * rc;
-            // |y| <= full_scale * 32767: no clamp needed, round to nearest.
-            *o++ = static_cast<int16_t>(yi + (yi >= 0 ? 0.5f : -0.5f));
-            *o++ = static_cast<int16_t>(yq + (yq >= 0 ? 0.5f : -0.5f));
-            const float nc = rc * sc - rs * ss;
-            rs = rc * ss + rs * sc;
-            rc = nc;
+            const int32_t a = static_cast<int32_t>(i3) >> sh;
+            const int32_t b = static_cast<int32_t>(q3) >> sh;
+            const int16_t* cs = tab + 2 * (ph >> kIdxShift);
+            ph += inc;
+            const int32_t c = cs[0], s = cs[1];
+            // |a|, |b| <= 2^16 and |c|, |s| < 2^15 * full_scale / 2: the
+            // sums stay inside 32 bits.
+            *o++ = static_cast<int16_t>((a * c - b * s + 8192) >> 14);
+            *o++ = static_cast<int16_t>((a * s + b * c + 8192) >> 14);
         }
     }
-    // Phase of the next sample: the resync above ran ahead by until_resync.
-    phase_ -= cycles_per_sample * static_cast<double>(until_resync);
-    phase_ -= std::floor(phase_);
+    phase_ = ph;
     gi[0] = i0, gi[1] = i1, gi[2] = i2, gi[3] = i3;
     gq[0] = q0, gq[1] = q1, gq[2] = q2, gq[3] = q3;
 }

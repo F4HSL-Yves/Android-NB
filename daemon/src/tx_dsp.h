@@ -64,12 +64,18 @@ public:
     void reset();
 
 private:
+    // Integer NCO: 32-bit phase, a table of kNcoBits (cos, sin) pairs with
+    // the output scaling folded in. Phase truncation spurs stay near
+    // -6 * kNcoBits dBc, well under the AD9363's own.
+    static constexpr unsigned kNcoBits = 12;
     double out_rate_;
     double full_scale_;
     double offset_ = 0;
-    double phase_ = 0;  // cycles, in [0, 1)
+    uint32_t phase_ = 0, inc_ = 0;
+    unsigned pre_shift_ = 0;  // integrator output >> pre_shift_ fits 16 bits
     CicInterpolator cic_;
     std::vector<int32_t> in_i32_, wide_;
+    std::vector<int16_t> nco_;  // cos, sin interleaved
 };
 
 // Microphone packets from the phone, in arrival order with their sequence
