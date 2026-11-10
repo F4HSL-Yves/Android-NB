@@ -103,4 +103,44 @@ private:
     uint64_t underruns_ = 0, dropped_ = 0;
 };
 
+// Automatic TX frequency correction (full duplex): with the tune carrier
+// on, nbd hears its own carrier back from the transponder in the
+// beacon-corrected receive baseband (centred on the dial, 48 kS/s). It
+// should sit at +expected_hz (the 1 kHz tone); the difference is the
+// uplink error, mostly the board's crystal (the beacon only corrects the
+// receive side, LNB drift included).
+class TxCalibrator {
+public:
+    enum class Step { Idle, Running, Done, Failed };
+    explicit TxCalibrator(double rate, size_t fft_size = 65536, double settle_s = 1.2);
+    void start(double expected_hz, double cal_hz);
+    void cancel() { step_ = Step::Idle; }
+    bool active() const { return step_ == Step::Running; }
+    // Feeds the receive baseband of one block lasting block_s. carrier_on:
+    // the transmitter is on with the tune carrier; locked: beacon lock.
+    // Returns Done (result()/message()) or Failed (message()) once.
+    Step feed(const cf* x, size_t n, double block_s, bool carrier_on, bool locked);
+    double new_cal_hz() const { return new_cal_; }
+    double measured_hz() const { return measured_; }
+    double snr_db() const { return snr_; }
+    const std::string& message() const { return msg_; }
+
+    static constexpr double kMaxStepHz = 6000.0;   // search +/- around the expected tone
+    static constexpr double kMaxCalHz = 20000.0;   // about 8 ppm at 2.4 GHz
+
+private:
+    Step finish(Step s, std::string msg) {
+        step_ = Step::Idle;
+        msg_ = std::move(msg);
+        return s;
+    }
+    double rate_, settle_s_;
+    size_t n_;
+    Step step_ = Step::Idle;
+    double expected_ = 1000, cal_ = 0, waited_ = 0;
+    double new_cal_ = 0, measured_ = 0, snr_ = 0;
+    std::string msg_;
+    std::vector<cf> buf_;
+};
+
 }  // namespace nb

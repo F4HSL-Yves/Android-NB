@@ -57,6 +57,8 @@ class NbConnection {
         private set
     /** nbd's transmitter. */
     var tx by mutableStateOf<NbProtocol.TxStatus?>(null)
+    /** Last automatic TX calibration (bumped on each result). */
+    var txCal by mutableStateOf<NbProtocol.TxCalMessage?>(null)
         private set
     /** Set by the UI (saved setting): PTT through the Arduino, with its confirmation. */
     @Volatile var arduinoPresent = true
@@ -232,6 +234,18 @@ class NbConnection {
     private fun setPtt(p: Ptt, message: String) = main.post {
         ptt = p
         pttMessage = message
+        applyVolume()
+    }
+
+    /** Receive audio silenced while transmitting (the waterfall keeps going). */
+    var muteRxOnTx = false
+        set(value) {
+            field = value
+            applyVolume()
+        }
+
+    private fun applyVolume() {
+        player?.volume = if (muteRxOnTx && ptt != Ptt.OFF) 0f else volume
     }
 
     /** Starts a transmission (PTT pressed). The RF goes on only after every check. */
@@ -321,8 +335,10 @@ class NbConnection {
 
     fun setVolume(v: Float) {
         volume = v
-        player?.volume = v
+        applyVolume()
     }
+
+    fun calibrateTx() = send(NbProtocol.TX_CAL_AUTO)
 
     fun tune(hz: Long) = send(NbProtocol.freqCommand(hz))
     fun setFilter(lowHz: Int, highHz: Int) = send(NbProtocol.filterCommand(lowHz, highHz))
@@ -341,7 +357,7 @@ class NbConnection {
     private fun startAudio() {
         jitter.clear()
         player = OpusPlayer(jitter).also {
-            it.volume = volume
+            it.volume = if (muteRxOnTx && ptt != Ptt.OFF) 0f else volume
             it.start()
         }
     }
@@ -433,6 +449,7 @@ class NbConnection {
                             vTxMessage = m.tx.message
                             main.post { tx = m.tx }
                         }
+                        is NbProtocol.TxCalMessage -> main.post { txCal = m }
                         is NbProtocol.Unknown -> {}
                     }
                 }

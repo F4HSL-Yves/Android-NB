@@ -394,6 +394,43 @@ void test_transmitter() {
 
 }  // namespace
 
+void test_calibrator() {
+    std::printf("TX calibration from the own carrier\n");
+    auto run = [](double tone_hz, double amp, bool carrier, bool locked, nb::TxCalibrator& c) {
+        c.start(1000.0, 500.0);
+        std::vector<nb::cf> blk(512);
+        uint32_t rnd = 12345;
+        double ph = 0;
+        for (int b = 0; b < 400; ++b) {
+            for (auto& v : blk) {
+                rnd = rnd * 1664525u + 1013904223u;
+                const float n1 = static_cast<float>(static_cast<int32_t>(rnd)) / 2147483648.0f;
+                rnd = rnd * 1664525u + 1013904223u;
+                const float n2 = static_cast<float>(static_cast<int32_t>(rnd)) / 2147483648.0f;
+                v = nb::cf(static_cast<float>(amp * std::cos(ph)) + 0.01f * n1,
+                           static_cast<float>(amp * std::sin(ph)) + 0.01f * n2);
+                ph += 2.0 * kPi * tone_hz / 48000.0;
+            }
+            const auto st = c.feed(blk.data(), blk.size(), 512.0 / 48000.0, carrier, locked);
+            if (st != nb::TxCalibrator::Step::Running) return st;
+        }
+        return nb::TxCalibrator::Step::Running;
+    };
+    nb::TxCalibrator c(48000.0);
+    // txcal 500 Hz, carrier heard at +69 Hz instead of +1000 (Yves, 10/11).
+    auto st = run(69.0, 0.1, true, true, c);
+    CHECK(st == nb::TxCalibrator::Step::Done, "done: %s", c.message().c_str());
+    CHECK(std::fabs(c.measured_hz() - 69.0) < 0.2, "measured %.2f Hz", c.measured_hz());
+    CHECK(std::fabs(c.new_cal_hz() - 1431.0) < 0.3, "new correction %.2f Hz", c.new_cal_hz());
+    CHECK(!c.active(), "finished");
+    st = run(69.0, 0.0, true, true, c);
+    CHECK(st == nb::TxCalibrator::Step::Failed, "noise only fails");
+    st = run(69.0, 0.1, true, false, c);
+    CHECK(st == nb::TxCalibrator::Step::Failed && c.message().find("beacon") != std::string::npos, "needs the lock");
+    st = run(69.0, 0.1, false, true, c);
+    CHECK(st == nb::TxCalibrator::Step::Failed, "needs the carrier");
+}
+
 void test_local_iio_lookup() {
     char tmpl[] = "/tmp/nbtx_sysfsXXXXXX";
     const char* root = mkdtemp(tmpl);
@@ -413,6 +450,7 @@ void test_local_iio_lookup() {
 }
 
 int main() {
+    test_calibrator();
     test_local_iio_lookup();
     test_upconverter();
     test_wdsp_sideband();

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
+#include <cstdio>
 #include <stdexcept>
 
 namespace nb {
@@ -223,6 +225,81 @@ void PacketJitter::reset() {
 size_t PacketJitter::size() const {
     std::lock_guard<std::mutex> lk(mu_);
     return q_.size();
+}
+
+// ---------------------------------------------------------------- TX calibration
+
+TxCalibrator::TxCalibrator(double rate, size_t fft_size, double settle_s)
+    : rate_(rate), settle_s_(settle_s), n_(fft_size) {
+    if (fft_size < 1024 || (fft_size & (fft_size - 1)) != 0) throw std::invalid_argument("TxCalibrator: FFT size");
+}
+
+void TxCalibrator::start(double expected_hz, double cal_hz) {
+    expected_ = expected_hz;
+    cal_ = cal_hz;
+    waited_ = 0;
+    buf_.clear();
+    buf_.reserve(n_);
+    msg_.clear();
+    step_ = Step::Running;
+}
+
+TxCalibrator::Step TxCalibrator::feed(const cf* x, size_t n, double block_s, bool carrier_on, bool locked) {
+    if (step_ != Step::Running) return step_ == Step::Idle ? Step::Idle : step_;
+    if (!carrier_on) return finish(Step::Failed, "calibration needs the tune carrier on the air");
+    if (!locked) return finish(Step::Failed, "calibration needs the beacon locked");
+    // The carrier needs the round trip to the satellite and the filters to
+    // settle before it can be measured.
+    if (waited_ < settle_s_) {
+        waited_ += block_s;
+        return Step::Running;
+    }
+    for (size_t i = 0; i < n && buf_.size() < n_; ++i) buf_.push_back(x[i]);
+    if (buf_.size() < n_) return Step::Running;
+
+    // Hann window, FFT, strongest bin around the expected tone, parabolic
+    // interpolation on the log magnitude (a fraction of a bin: < 0.1 Hz).
+    std::vector<std::complex<double>> a(n_);
+    for (size_t i = 0; i < n_; ++i) {
+        const double w = 0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(i) / static_cast<double>(n_));
+        a[i] = std::complex<double>(buf_[i].real(), buf_[i].imag()) * w;
+    }
+    fft_inplace(a);
+    const double df = rate_ / static_cast<double>(n_);
+    auto bin_of = [&](double f) {
+        long k = std::lround(f / df);
+        return static_cast<size_t>((k % static_cast<long>(n_) + static_cast<long>(n_)) % static_cast<long>(n_));
+    };
+    auto pw = [&](size_t k) { return std::norm(a[k % n_]) + 1e-30; };
+    const long lo = std::lround((expected_ - kMaxStepHz) / df), hi = std::lround((expected_ + kMaxStepHz) / df);
+    long best = lo;
+    double best_p = 0;
+    std::vector<double> all;
+    all.reserve(static_cast<size_t>(hi - lo + 1));
+    for (long k = lo; k <= hi; ++k) {
+        const double p = pw(bin_of(static_cast<double>(k) * df));
+        all.push_back(p);
+        if (p > best_p) best_p = p, best = k;
+    }
+    std::nth_element(all.begin(), all.begin() + static_cast<long>(all.size() / 2), all.end());
+    const double floor_p = all[all.size() / 2];
+    snr_ = 10.0 * std::log10(best_p / floor_p);
+    if (snr_ < 20.0) return finish(Step::Failed, "own carrier not found near the dial (SNR " + std::to_string(static_cast<int>(snr_)) + " dB)");
+    const double ym = std::log(pw(bin_of(static_cast<double>(best - 1) * df)));
+    const double y0 = std::log(best_p);
+    const double yp = std::log(pw(bin_of(static_cast<double>(best + 1) * df)));
+    const double den = ym - 2.0 * y0 + yp;
+    const double frac = den < 0 ? std::clamp(0.5 * (ym - yp) / den, -0.5, 0.5) : 0.0;
+    measured_ = (static_cast<double>(best) + frac) * df;
+    new_cal_ = cal_ + (expected_ - measured_);
+    if (std::fabs(new_cal_) > kMaxCalHz) {
+        char m[120];
+        std::snprintf(m, sizeof m, "TX correction %+.0f Hz out of range: wrong carrier?", new_cal_);
+        return finish(Step::Failed, m);
+    }
+    char m[120];
+    std::snprintf(m, sizeof m, "carrier at %+.1f Hz, TX correction %+.0f Hz", measured_, new_cal_);
+    return finish(Step::Done, m);
 }
 
 }  // namespace nb

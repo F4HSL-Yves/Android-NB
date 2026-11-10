@@ -107,6 +107,11 @@ class NbProtocolTest {
                 """"audio":{"codec":"opus"},"source":"pluto","spectrum":{"source":"maia","max_bins":2048},"tx":true}""",
         ) as NbProtocol.HelloMessage
         assertTrue(hello.hello.tx)
+        val cal = NbProtocol.parse("""{"type":"txcal","hz":1431,"measured":69.0,"snr":42.5}""") as NbProtocol.TxCalMessage
+        assertEquals(1431, cal.hz)
+        assertEquals(69.0, cal.measuredHz, 1e-9)
+        assertEquals("""{"cmd":"txcal_auto"}""", NbProtocol.TX_CAL_AUTO)
+        assertEquals("""{"cmd":"comp","on":1,"db":10}""", NbProtocol.compCommand(true))
         assertEquals("maia", hello.hello.spectrumSource)
         val noTx = NbProtocol.parse("""{"type":"hello","version":1,"spectrum":{"source":"off"},"tx":false}""")
         assertTrue(!(noTx as NbProtocol.HelloMessage).hello.tx)

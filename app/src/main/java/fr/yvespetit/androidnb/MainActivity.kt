@@ -389,6 +389,14 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
     // Follow the board's gain until the user moves the slider.
     LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
     // nbd forgets the correction when it restarts: send it on each connection.
+    var muteTx by rememberSaveable { mutableStateOf(prefs.getBoolean("mute_rx_tx", false)) }
+    LaunchedEffect(muteTx) { c.muteRxOnTx = muteTx }
+    LaunchedEffect(c.txCal) {
+        c.txCal?.let {
+            prefs.edit().putInt("tx_cal", it.hz).apply()
+            calText = it.hz.toString()
+        }
+    }
     var comp by rememberSaveable { mutableStateOf(prefs.getBoolean("comp", false)) }
     var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain", 10).toFloat()) }
     LaunchedEffect(connected) {
@@ -487,6 +495,12 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
                 prefs.edit().putBoolean("comp", comp).apply()
                 c.setCompressor(comp)
             }, label = { Text("Compresseur") })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = muteTx, onClick = {
+                muteTx = !muteTx
+                prefs.edit().putBoolean("mute_rx_tx", muteTx).apply()
+            }, label = { Text("Muet en TX") })
             Text("Arduino", style = MaterialTheme.typography.bodySmall)
             Switch(checked = arduino, enabled = !active, onCheckedChange = {
                 arduino = it
@@ -505,6 +519,16 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
                     c.setTxCal(it)
                 }
             }) { Text("OK") }
+            Button(
+                onClick = { c.calibrateTx() },
+                enabled = c.ptt == NbConnection.Ptt.ON && c.tx?.tune == true,
+            ) { Text("Calibrer") }
+        }
+        c.txCal?.let {
+            Text(
+                String.format(Locale.FRANCE, "Calibré : porteuse reçue à %+.0f Hz, correction %+d Hz", it.measuredHz, it.hz),
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
 
         val tx = c.tx

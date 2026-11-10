@@ -69,6 +69,8 @@ Command parse_command(const std::string& json, std::string& error) {
             if (c.a < -20 || c.a > 30) error = "micgain: db -20..30";
             else c.type = Command::MicGain;
         }
+    } else if (cmd == "txcal_auto") {
+        c.type = Command::TxCalAuto;
     } else if (cmd == "comp") {
         if (num("on", c.a)) {
             if (!json_number(json, "db", c.b)) c.b = 10.0;

@@ -45,6 +45,7 @@
 #include "spectrum.h"
 #include "transmitter.h"
 #include "ws_server.h"
+#include "tx_dsp.h"
 #include "wdsp_rx.h"
 
 namespace {
@@ -336,6 +337,8 @@ int main(int argc, char** argv) {
 
     std::unique_ptr<nb::WsServer> ws;
     std::unique_ptr<nb::Transmitter> tx;
+    nb::TxCalibrator calib(48000.0);
+    double tune_hz = 1000.0;
     std::unique_ptr<nb::OpusAudio> opus;
     uint16_t audio_seq = 0;
     bool opus_idle = true;
@@ -423,6 +426,7 @@ int main(int argc, char** argv) {
                 if (c.a < min_freq || c.a > max_freq) error = "freq outside the received band";
                 else station_offset = c.a - o.center_hz;
                 if (tx && error.empty()) tx->set_dial(c.a);
+                calib.cancel();
                 break;
             case nb::Command::Filter:
                 filter_low = c.a;
@@ -453,8 +457,25 @@ int main(int argc, char** argv) {
                 break;
             case nb::Command::Tune:
                 if (!tx) error = "this nbd has no transmitter (--tx)";
-                else tx->set_tune(c.a != 0.0, c.b);
+                else {
+                    tx->set_tune(c.a != 0.0, c.b);
+                    tune_hz = c.b;
+                }
                 break;
+            case nb::Command::TxCalAuto: {
+                if (!tx) {
+                    error = "this nbd has no transmitter (--tx)";
+                    break;
+                }
+                if (!frontend) {
+                    error = "TX calibration needs the 48 kHz front end";
+                    break;
+                }
+                const nb::TxStatus st = tx->status();
+                if (st.state != "on" || !st.tune) error = "TX calibration: turn the tune carrier on and transmit first";
+                else calib.start(tune_hz, st.cal_hz);
+                break;
+            }
             case nb::Command::TxCal:
                 if (!tx) error = "this nbd has no transmitter (--tx)";
                 else tx->set_cal(c.a);
@@ -511,6 +532,21 @@ int main(int argc, char** argv) {
             narrow.clear();
             frontend->process(iq.data(), iq.size(), narrow);
             rx.process(narrow.data(), audio);
+            if (calib.active() && tx) {
+                const nb::TxStatus st = tx->status();
+                const auto step = calib.feed(narrow.data(), narrow.size(), static_cast<double>(narrow.size()) / 48000.0,
+                                             st.state == "on" && st.tune, lock.state() == nb::LockState::Locked);
+                if (step == nb::TxCalibrator::Step::Done) {
+                    tx->set_cal(calib.new_cal_hz());
+                    char m[200];
+                    std::snprintf(m, sizeof m, "{\"type\":\"txcal\",\"hz\":%.0f,\"measured\":%.1f,\"snr\":%.1f}",
+                                  calib.new_cal_hz(), calib.measured_hz(), calib.snr_db());
+                    if (ws) ws->broadcast_text(m);
+                    if (!o.quiet) std::fprintf(stderr, "nbd: %s\n", calib.message().c_str());
+                } else if (step == nb::TxCalibrator::Step::Failed) {
+                    if (ws) ws->broadcast_text("{\"type\":\"error\",\"message\":\"" + calib.message() + "\"}");
+                }
+            }
         } else {
             rx.set_offset_hz(station_offset + lock.correction_hz());
             rx.process(iq.data(), audio);

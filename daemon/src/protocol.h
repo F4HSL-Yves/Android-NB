@@ -24,6 +24,8 @@
 //   {"cmd":"txcal","hz":-120}               uplink correction, Hz (board reference error)
 //   {"cmd":"micgain","db":0}                microphone gain before the leveler, -20..+30 dB
 //   {"cmd":"comp","on":1,"db":10}           WDSP speech compressor, 0..20 dB
+//   {"cmd":"txcal_auto"}                    measure the own tune carrier, set the TX correction
+//                                           (answer: {"type":"txcal","hz":..,"measured":..,"snr":..})
 //   binary 0x03, seq (uint16 big endian), one Opus packet: microphone,
 //          48 kHz mono, 20 ms. Must keep flowing while transmitting: nbd
 //          stops the transmission after 1 s without one.
@@ -46,7 +48,7 @@ constexpr uint8_t kSpectrumLine = 0x02;
 constexpr uint8_t kMicOpus = 0x03;
 
 struct Command {
-    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp } type = None;
+    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp, TxCalAuto } type = None;
     double a = 0.0, b = 0.0, c = 0.0, d = 0.0;
 };
 

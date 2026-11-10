@@ -64,6 +64,8 @@ object NbProtocol {
     data class StatusMessage(val status: Status) : Message
     data class ErrorMessage(val text: String) : Message
     data class TxMessage(val tx: TxStatus) : Message
+    /** Result of {"cmd":"txcal_auto"}: the new TX correction nbd applied. */
+    data class TxCalMessage(val hz: Int, val measuredHz: Double, val snrDb: Double) : Message
     data class Unknown(val raw: String) : Message
 
     class AudioPacket(val seq: Int, val opus: ByteArray)
@@ -142,6 +144,11 @@ object NbProtocol {
                 ),
             )
         }
+        "txcal" -> TxCalMessage(
+            hz = number(text, "hz")?.toInt() ?: 0,
+            measuredHz = number(text, "measured") ?: 0.0,
+            snrDb = number(text, "snr") ?: 0.0,
+        )
         "error" -> ErrorMessage(string(text, "message") ?: text)
         else -> Unknown(text)
     }
@@ -178,6 +185,8 @@ object NbProtocol {
     fun tuneCommand(on: Boolean, hz: Int = 1000) = """{"cmd":"tune","on":${if (on) 1 else 0},"hz":$hz}"""
     fun txCalCommand(hz: Int) = """{"cmd":"txcal","hz":$hz}"""
     fun micGainCommand(db: Int) = """{"cmd":"micgain","db":$db}"""
+
+    const val TX_CAL_AUTO = """{"cmd":"txcal_auto"}"""
 
     fun compCommand(on: Boolean, db: Int = 10) = """{"cmd":"comp","on":${if (on) 1 else 0},"db":$db}"""
 
