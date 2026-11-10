@@ -131,6 +131,8 @@ class NbWebSocket private constructor(private val socket: Socket) {
 
     fun sendText(text: String) = sendFrame(0x1, text.toByteArray(Charsets.UTF_8))
 
+    fun sendBinary(data: ByteArray) = sendFrame(0x2, data)
+
     private fun sendFrame(opcode: Int, payload: ByteArray) {
         val mask = ByteArray(4).also { random.nextBytes(it) }
         val n = payload.size

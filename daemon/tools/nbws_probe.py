@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import struct
+import threading
 import sys
 import time
 from urllib.parse import urlparse
@@ -63,6 +64,9 @@ def main():
     ap.add_argument("--bitrate", type=int)
     ap.add_argument("--spectrum", help="span,bins,rate of the waterfall, e.g. 768000,768,8")
     ap.add_argument("--seconds", type=float, default=5.0)
+    ap.add_argument("--tx-tune", action="store_true",
+                    help="open nbd's transmitter with a 1 kHz carrier for --seconds, feeding silent microphone "
+                         "packets (the RF stays muted unless tx/mute is set to 0 over MQTT)")
     a = ap.parse_args()
 
     u = urlparse(a.url)
@@ -89,6 +93,25 @@ def main():
         span, bins, rate = (float(x) for x in a.spectrum.split(","))
         send_frame(sock, 1, json.dumps({"cmd": "spectrum", "center": 0, "span": span, "bins": int(bins),
                                         "rate": rate}).encode())
+
+    tx_thread = None
+    tx_stop = threading.Event()
+    if a.tx_tune:
+        send_frame(sock, 1, json.dumps({"cmd": "tune", "on": 1, "hz": 1000}).encode())
+        send_frame(sock, 1, json.dumps({"cmd": "tx", "on": 1}).encode())
+
+        def mic():
+            seq = 0
+            nxt = time.time()
+            while not tx_stop.is_set():
+                # 20 ms of Opus silence: nbd only needs the stream to keep flowing.
+                send_frame(sock, 2, b"\x03" + struct.pack(">H", seq & 0xFFFF) + b"\xf8\xff\xfe")
+                seq += 1
+                nxt += 0.02
+                time.sleep(max(0.0, nxt - time.time()))
+
+        tx_thread = threading.Thread(target=mic, daemon=True)
+        tx_thread.start()
 
     center = None
     lines = spectrum_bytes = 0
@@ -118,6 +141,12 @@ def main():
         elif op == 8:
             break
     dt = time.time() - t0
+    if tx_thread:
+        send_frame(sock, 1, json.dumps({"cmd": "tx", "on": 0}).encode())
+        tx_stop.set()
+        tx_thread.join()
+        send_frame(sock, 1, json.dumps({"cmd": "tune", "on": 0}).encode())
+        time.sleep(0.5)
     send_frame(sock, 8, b"\x03\xe8")
     print(f"audio: {packets} packets in {dt:.1f} s ({packets / dt:.1f}/s, expected 50), "
           f"{audio_bytes * 8 / dt / 1000:.1f} kbit/s, {lost} lost")

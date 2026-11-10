@@ -284,7 +284,7 @@ void IiodClient::set_kernel_buffers(const IioDeviceInfo& dev, int count) {
 void IiodClient::open_buffer(const IioDeviceInfo& dev, size_t samples, const std::string& mask) {
     send("OPEN " + dev.id + " " + std::to_string(samples) + " " + mask + "\r\n");
     const int r = read_integer();
-    if (r == -16) throw IiodError("RX buffer busy: another program (zynqrx, maia recorder...) holds it", r);
+    if (r == -16) throw IiodError(dev.name + " buffer busy: another program holds it", r);
     if (r < 0) throw IiodError("OPEN " + dev.id + " refused", r);
 }
 
@@ -307,6 +307,15 @@ size_t IiodClient::read_buffer(const IioDeviceInfo& dev, std::vector<uint8_t>& o
         offset += static_cast<size_t>(len);
     }
     return offset;
+}
+
+void IiodClient::write_buffer(const IioDeviceInfo& dev, const void* data, size_t bytes) {
+    send("WRITEBUF " + dev.id + " " + std::to_string(bytes) + "\r\n");
+    int r = read_integer();
+    if (r < 0) throw IiodError("WRITEBUF refused", r);
+    send_bytes(data, bytes);
+    r = read_integer();
+    if (r < 0) throw IiodError("WRITEBUF failed", r);
 }
 
 void IiodClient::close_buffer(const IioDeviceInfo& dev) {

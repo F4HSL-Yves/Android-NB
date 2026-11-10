@@ -8,7 +8,9 @@
 
 #include <chrono>
 #include <functional>
+#include <atomic>
 #include <cmath>
+#include <mutex>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -135,8 +137,11 @@ void test_helpers() {
     c = nb::parse_command("{\"cmd\":\"filter\",\"low\":2700,\"high\":300}", err);
     CHECK(c.type == nb::Command::None && !err.empty(), "bad filter refused");
     err.clear();
+    c = nb::parse_command("{\"cmd\":\"ptt\"}", err);
+    CHECK(c.type == nb::Command::None && err == "unknown cmd ptt", "unknown: %s", err.c_str());
+    err.clear();
     c = nb::parse_command("{\"cmd\":\"tx\"}", err);
-    CHECK(c.type == nb::Command::None && err == "unknown cmd tx", "unknown: %s", err.c_str());
+    CHECK(c.type == nb::Command::None && err == "tx: missing on", "tx without on: %s", err.c_str());
     const std::string pkt = nb::audio_packet(0x1234, "abc");
     CHECK(pkt.size() == 6 && pkt[0] == 1 && static_cast<uint8_t>(pkt[1]) == 0x12 && pkt[2] == 0x34, "audio header");
 }
@@ -145,6 +150,14 @@ void test_server() {
     std::printf("server\n");
     nb::WsServer ws;
     ws.set_hello("{\"type\":\"hello\"}");
+    std::mutex bin_mu;
+    std::vector<std::pair<int, std::string>> binaries;
+    std::atomic<int> closed_id{0};
+    ws.on_binary = [&](int client, const std::string& m) {
+        std::lock_guard<std::mutex> lk(bin_mu);
+        binaries.push_back({client, m});
+    };
+    ws.on_close = [&](int client) { closed_id = client; };
     ws.start("127.0.0.1", 0);
 
     {
@@ -163,7 +176,20 @@ void test_server() {
 
     c.send_frame(0x1, "{\"cmd\":\"agc\",\"mode\":4}");
     std::string cmd;
-    CHECK(wait_for([&] { return ws.next_command(cmd); }) && cmd == "{\"cmd\":\"agc\",\"mode\":4}", "command queued");
+    int from = 0;
+    CHECK(wait_for([&] { return ws.next_command(cmd, from); }) && cmd == "{\"cmd\":\"agc\",\"mode\":4}",
+          "command queued");
+    CHECK(from > 0, "command carries the client id");
+    c.send_frame(0x2, std::string("\x03\x00\x05mic", 6));
+    CHECK(wait_for([&] {
+              std::lock_guard<std::mutex> lk(bin_mu);
+              return binaries.size() == 1;
+          }),
+          "binary message handed over");
+    {
+        std::lock_guard<std::mutex> lk(bin_mu);
+        CHECK(!binaries.empty() && binaries[0].first == from && binaries[0].second.size() == 6, "binary from the same client");
+    }
 
     c.send_frame(0x9, "hi");
     CHECK(c.frame(op, p) && op == 0xA && p == "hi", "pong");
@@ -192,6 +218,7 @@ void test_server() {
     c.send_frame(0x8, std::string("\x03\xe8", 2));
     CHECK(c.frame(op, p) && op == 8, "close echoed");
     CHECK(wait_for([&] { return ws.clients() == 0; }), "client gone");
+    CHECK(wait_for([&] { return closed_id.load() == from; }), "on_close for the client (%d)", closed_id.load());
     ws.stop();
 }
 

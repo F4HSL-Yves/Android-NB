@@ -67,6 +67,9 @@ public:
     void open_buffer(const IioDeviceInfo& dev, size_t samples, const std::string& mask);
     // Reads up to out.size() bytes of samples; returns the byte count (0 at end).
     size_t read_buffer(const IioDeviceInfo& dev, std::vector<uint8_t>& out, size_t mask_words);
+    // Transmit buffer (libiio network backend: command, ack, data, result).
+    // Blocks while the kernel buffers are full, i.e. at the DAC pace.
+    void write_buffer(const IioDeviceInfo& dev, const void* data, size_t bytes);
     void close_buffer(const IioDeviceInfo& dev);
 
 private:

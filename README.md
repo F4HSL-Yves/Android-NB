@@ -165,6 +165,38 @@ affiche « Réception DATV en cours » ; au stop, la carte revient d'elle-même
 en NB et l'appli se reconnecte. L'APK de debug est
 produit par la CI.
 
+## Émission BLU (full duplex)
+
+Avec `--tx`, `nbd` module aussi la BLU : l'appli envoie son micro en Opus
+(48 kHz mono, paquets de 20 ms, type binaire 0x03), `nbd` le décode, le
+module en USB avec WDSP (leveler et ALC, porteuse de réglage possible),
+monte à 3,072 MS/s (CIC d'ordre 4 puis NCO) et l'écrit dans la DMA TX de
+l'AD9363 par iiod. La réception continue pendant ce temps : on entend son
+propre signal revenir du satellite.
+
+- **Plan de fréquences** : montée = descente - 8089,5 MHz, plus une
+  correction réglable dans l'appli (`txcal`). L'OL TX de l'AD9363 reste à
+  2399,5 MHz (`--tx-lo`), sous le transpondeur, pour que sa fuite et
+  l'image IQ tombent hors bande ; le signal est placé à +0,5 à +1 MHz par
+  le NCO.
+- **Même logique qu'Android-DATV** pour la RF : l'appli passe
+  `cmd/pluto/<indicatif>/tx/stream/mode` à `pass` (pluto_stream libère la
+  DMA TX ; l'ancien mode est remis quand on arrête l'appli), demande
+  l'émission à `nbd` (RF encore muette), active `arduino/ptt on`, attend
+  `arduino/status/ptt on`, puis seulement `tx/mute 0`. Au relâchement :
+  `tx/mute 1`, `arduino/ptt off`, puis `nbd`. Le curseur de gain règle
+  `cmd/pluto/<indicatif>/tx/gain` (-50 à 0 dB). Sans Arduino (réglage de
+  l'appli), le PTT ne commande que le mute.
+- **Sécurités dans `nbd`** : il coupe l'OL TX (`TX_LO_powerdown`) et publie
+  `arduino/ptt off` si le téléphone se déconnecte, si le flux micro
+  s'arrête plus d'une seconde, si la fréquence sort du transpondeur ou
+  après 10 minutes d'émission (`--tx-max`). L'appli coupe aussi
+  l'émission quand elle passe en arrière-plan.
+- **Essai sans l'appli** : `tools/nbws_probe.py ws://CARTE:8073 --tx-tune
+  --seconds 10` ouvre l'émetteur avec une porteuse à +1 kHz du cadran ; la
+  RF reste muette tant que `tx/mute` n'est pas passé à 0. Hors carte,
+  `--tx-file tx.cs16` écrit les IQ dans un fichier au lieu de la DMA.
+
 ## Licence
 
 GPL-3.0 (WDSP est sous GPL-2.0 ou ultérieure).

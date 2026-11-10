@@ -32,6 +32,50 @@ class NbConnection {
     var mqttUp by mutableStateOf(false)
         private set
 
+    // ------------------------------------------------------------ transmit
+    // Same logic as Android-DATV: the RF goes on only once the Arduino has
+    // confirmed its PTT (arduino/status/ptt), through Tezuka's tx/mute; the
+    // gain is Tezuka's tx/gain. nbd only produces the SSB signal (see
+    // daemon/src/transmitter.h) and cuts everything if the phone goes quiet.
+    enum class Ptt { OFF, STARTING, ON, STOPPING }
+
+    var ptt by mutableStateOf(Ptt.OFF)
+        private set
+    /** Why the last transmission ended or failed, or what the PTT is doing. */
+    var pttMessage by mutableStateOf("")
+        private set
+    /** Tezuka's state over MQTT (dt/pluto/<call>/...), null while unknown. */
+    var callsign by mutableStateOf<String?>(null)
+        private set
+    var txGainDb by mutableStateOf<Double?>(null)
+        private set
+    var txMuted by mutableStateOf<Boolean?>(null)
+        private set
+    var arduinoPtt by mutableStateOf<Boolean?>(null)
+        private set
+    var paTempC by mutableStateOf<Double?>(null)
+        private set
+    /** nbd's transmitter. */
+    var tx by mutableStateOf<NbProtocol.TxStatus?>(null)
+        private set
+    /** Set by the UI (saved setting): PTT through the Arduino, with its confirmation. */
+    @Volatile var arduinoPresent = true
+
+    @Volatile private var vCallsign: String? = null
+    @Volatile private var vStreamMode: String? = null
+    @Volatile private var vArduinoPtt: Boolean? = null
+    @Volatile private var arduinoReports = 0L
+    @Volatile private var vTxState = "off"
+    @Volatile private var vTxMessage = ""
+    @Volatile private var pttCancel = false
+    @Volatile private var savedStreamMode: String? = null
+    private var pttThread: Thread? = null
+    private val mic = MicStreamer { seq, opus ->
+        val ws = socket ?: return@MicStreamer
+        runCatching { ws.sendBinary(NbProtocol.micPacket(seq, opus)) }
+    }
+    val micLevelDb get() = mic.levelDb
+
     /** Waterfall rows; only touched on the main thread. */
     val waterfall = Waterfall()
     /** Bumped on every new waterfall row, so Compose redraws. */
@@ -74,6 +118,16 @@ class NbConnection {
     }
 
     fun disconnect() {
+        pttOff()
+        pttThread?.join(3000)
+        pttThread = null
+        // Leave pluto_stream as it was found (DATV transmissions need it).
+        val restore = savedStreamMode
+        val call = vCallsign
+        if (restore != null && call != null) {
+            mqtt?.let { m -> runCatching { m.publish("cmd/pluto/$call/tx/stream/mode", restore) } }
+            savedStreamMode = null
+        }
         wanted = false
         socket?.close()
         mqtt?.close()
@@ -94,6 +148,11 @@ class NbConnection {
                 mqtt = m
                 main.post { mqttUp = true }
                 m.subscribe("state/nb/mode")
+                m.subscribe("dt/pluto/+/tx/stream/mode")
+                m.subscribe("dt/pluto/+/tx/mute")
+                m.subscribe("dt/pluto/+/tx/gain")
+                m.subscribe("arduino/status/ptt")
+                m.subscribe("arduino/status/pa/temp")
                 if (askNb) {
                     m.publish("cmd/nb/mode", "nb")
                     askNb = false
@@ -105,8 +164,7 @@ class NbConnection {
                         m.ping()
                         continue
                     }
-                    val payload = msg.payload.trim()
-                    if (msg.topic == "state/nb/mode") main.post { boardMode = payload }
+                    onMqtt(msg.topic, msg.payload.trim())
                 }
             } catch (_: Exception) {
                 // Board unreachable or broker restarting: retry below.
@@ -123,6 +181,138 @@ class NbConnection {
             }
         }
     }
+
+    private fun onMqtt(topic: String, payload: String) {
+        if (topic == "state/nb/mode") {
+            main.post { boardMode = payload }
+            return
+        }
+        if (topic == "arduino/status/ptt") {
+            val on = when (payload.lowercase()) {
+                "on" -> true
+                "off" -> false
+                else -> return
+            }
+            vArduinoPtt = on
+            arduinoReports++
+            main.post { arduinoPtt = on }
+            return
+        }
+        if (topic == "arduino/status/pa/temp") {
+            payload.toDoubleOrNull()?.let { t -> main.post { paTempC = t } }
+            return
+        }
+        // dt/pluto/<call>/tx/...
+        val parts = topic.split('/')
+        if (parts.size < 5 || parts[0] != "dt" || parts[1] != "pluto") return
+        val call = parts[2]
+        if (vCallsign != call) {
+            vCallsign = call
+            main.post { callsign = call }
+        }
+        when (parts.drop(3).joinToString("/")) {
+            "tx/stream/mode" -> vStreamMode = payload
+            "tx/mute" -> payload.toDoubleOrNull()?.let { v -> main.post { txMuted = v != 0.0 } }
+            "tx/gain" -> payload.toDoubleOrNull()?.let { v -> main.post { txGainDb = v } }
+        }
+    }
+
+    private class TxFail(message: String) : Exception(message)
+
+    private fun waitFor(ms: Long, cond: () -> Boolean): Boolean {
+        val end = System.nanoTime() + ms * 1_000_000
+        while (System.nanoTime() < end) {
+            if (cond()) return true
+            if (pttCancel) return false
+            Thread.sleep(20)
+        }
+        return cond()
+    }
+
+    private fun setPtt(p: Ptt, message: String) = main.post {
+        ptt = p
+        pttMessage = message
+    }
+
+    /** Starts a transmission (PTT pressed). The RF goes on only after every check. */
+    fun pttOn() {
+        if (pttThread?.isAlive == true) return
+        pttCancel = false
+        pttThread = Thread({ runPtt() }, "nb-ptt").apply { start() }
+    }
+
+    /** Ends the transmission (PTT released); safe to call at any time. */
+    fun pttOff() {
+        pttCancel = true
+    }
+
+    private fun runPtt() {
+        setPtt(Ptt.STARTING, "Préparation…")
+        var failure = ""
+        try {
+            val m = mqtt ?: throw TxFail("MQTT de la carte injoignable")
+            val call = vCallsign ?: throw TxFail("Indicatif de la carte inconnu (aucun dt/pluto/… reçu)")
+            if (socket == null) throw TxFail("nbd n'est pas connecté")
+            // 1. pluto_stream must leave the TX DMA to nbd.
+            if (vStreamMode != "pass") {
+                if (savedStreamMode == null) savedStreamMode = vStreamMode
+                setPtt(Ptt.STARTING, "pluto_stream en mode pass…")
+                m.publish("cmd/pluto/$call/tx/stream/mode", "pass")
+                if (!waitFor(4000) { vStreamMode == "pass" }) throw TxFail("pluto_stream ne libère pas la DMA TX")
+            }
+            // 2. Microphone and nbd's transmitter (RF still muted).
+            mic.start()
+            vTxState = "starting"
+            socket?.sendText(NbProtocol.txCommand(true))
+            if (!waitFor(5000) { vTxState == "on" || vTxState == "error" }) throw TxFail("nbd ne répond pas")
+            if (vTxState != "on") throw TxFail("nbd : " + vTxMessage.ifEmpty { "émission refusée" })
+            mic.error?.let { throw TxFail("Micro : $it") }
+            // 3. Arduino PTT, confirmed (same as Android-DATV).
+            if (arduinoPresent) {
+                setPtt(Ptt.STARTING, "PTT Arduino…")
+                val before = arduinoReports
+                m.publish("arduino/ptt", "on")
+                if (!waitFor(3000) { arduinoReports > before && vArduinoPtt == true }) {
+                    throw TxFail("PTT non confirmé par l’Arduino : sortie RF maintenue muette")
+                }
+            }
+            if (pttCancel) throw TxFail("")
+            // 4. RF on.
+            m.publish("cmd/pluto/$call/tx/mute", "0")
+            setPtt(Ptt.ON, "Émission")
+            while (!pttCancel) {
+                if (vTxState != "on") throw TxFail("nbd a coupé l’émission : $vTxMessage")
+                if (arduinoPresent && vArduinoPtt == false) throw TxFail("PTT coupé par l’Arduino")
+                if (socket == null) throw TxFail("Liaison avec nbd perdue")
+                mic.error?.let { throw TxFail("Micro : $it") }
+                Thread.sleep(50)
+            }
+        } catch (e: TxFail) {
+            failure = e.message ?: ""
+        } catch (e: Exception) {
+            failure = e.message ?: e.javaClass.simpleName
+        }
+        setPtt(Ptt.STOPPING, "Arrêt…")
+        // RF off first, then the Arduino, then nbd (which mutes again anyway).
+        val m = mqtt
+        val call = vCallsign
+        if (m != null && call != null) runCatching { m.publish("cmd/pluto/$call/tx/mute", "1") }
+        if (m != null && arduinoPresent) runCatching { m.publish("arduino/ptt", "off") }
+        runCatching { socket?.sendText(NbProtocol.txCommand(false)) }
+        mic.stop()
+        setPtt(Ptt.OFF, failure)
+    }
+
+    /** Tezuka's TX attenuation, -50..0 dB (cmd/pluto/<call>/tx/gain). */
+    fun setTxGain(db: Int) {
+        val call = vCallsign ?: return
+        val m = mqtt ?: return
+        Thread { runCatching { m.publish("cmd/pluto/$call/tx/gain", db.coerceIn(-50, 0).toString()) } }.start()
+    }
+
+    fun setTune(on: Boolean, hz: Int = 1000) = send(NbProtocol.tuneCommand(on, hz))
+    fun setTxCal(hz: Int) = send(NbProtocol.txCalCommand(hz))
+    fun setMicGain(db: Int) = send(NbProtocol.micGainCommand(db))
 
     fun setPrefillPackets(n: Int) {
         jitter.prefill = n
@@ -229,7 +419,19 @@ class NbConnection {
                     when (val m = NbProtocol.parse(f.text)) {
                         is NbProtocol.HelloMessage -> main.post { hello = m.hello }
                         is NbProtocol.StatusMessage -> main.post { status = m.status }
-                        is NbProtocol.ErrorMessage -> main.post { lastError = m.text }
+                        is NbProtocol.ErrorMessage -> {
+                            // A refused {"cmd":"tx"} comes back as an error.
+                            if (vTxState == "starting") {
+                                vTxMessage = m.text
+                                vTxState = "error"
+                            }
+                            main.post { lastError = m.text }
+                        }
+                        is NbProtocol.TxMessage -> {
+                            vTxState = m.tx.state
+                            vTxMessage = m.tx.message
+                            main.post { tx = m.tx }
+                        }
                         is NbProtocol.Unknown -> {}
                     }
                 }

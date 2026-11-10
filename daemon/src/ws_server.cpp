@@ -198,9 +198,15 @@ void WsServer::broadcast_spectrum(const std::string& payload) {
 }
 
 bool WsServer::next_command(std::string& text) {
+    int client = 0;
+    return next_command(text, client);
+}
+
+bool WsServer::next_command(std::string& text, int& client) {
     std::lock_guard<std::mutex> lk(mu_);
     if (commands_.empty()) return false;
-    text = std::move(commands_.front());
+    client = commands_.front().first;
+    text = std::move(commands_.front().second);
     commands_.pop_front();
     return true;
 }
@@ -252,6 +258,7 @@ void WsServer::run() {
             if (!ok) {
                 ::close(c.fd);
                 c.fd = -1;
+                if (c.open && on_close) on_close(c.id);
             }
         }
         size_t open = 0;
@@ -274,6 +281,7 @@ void WsServer::accept_client() {
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
         Client c;
         c.fd = fd;
+        c.id = next_id_++;
         list_.push_back(std::move(c));
     }
 }
@@ -368,7 +376,9 @@ bool WsServer::parse_frames(Client& c) {
         if (fin) {
             if (c.message_opcode == 0x1) {
                 std::lock_guard<std::mutex> lk(mu_);
-                if (commands_.size() < 256) commands_.push_back(c.message);
+                if (commands_.size() < 256) commands_.push_back({c.id, c.message});
+            } else if (c.message_opcode == 0x2 && on_binary) {
+                on_binary(c.id, c.message);
             }
             c.message.clear();
         }

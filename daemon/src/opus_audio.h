@@ -8,6 +8,7 @@
 #include <vector>
 
 struct OpusEncoder;
+struct OpusDecoder;
 
 namespace nb {
 
@@ -37,6 +38,26 @@ private:
     std::vector<float> buf_;
     std::string scratch_;
     uint64_t bad_samples_ = 0;
+};
+
+// Decoder for the microphone packets from the phone (48 kHz mono, any frame
+// length Opus allows). A lost packet is concealed by libopus.
+class OpusMicDecoder {
+public:
+    OpusMicDecoder();
+    ~OpusMicDecoder();
+    OpusMicDecoder(const OpusMicDecoder&) = delete;
+    OpusMicDecoder& operator=(const OpusMicDecoder&) = delete;
+
+    // Appends the decoded samples; false (nothing appended) for a bad packet.
+    bool decode(const std::string& packet, std::vector<float>& out);
+    // Concealment for one missing 20 ms packet.
+    void conceal(std::vector<float>& out);
+    void reset();
+
+private:
+    OpusDecoder* dec_ = nullptr;
+    std::vector<float> scratch_;
 };
 
 }  // namespace nb

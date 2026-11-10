@@ -14,6 +14,10 @@
 // WebSocket (see protocol.h), plus a waterfall of the band taken from
 // Maia's FPGA spectrometer (or computed here for other sources).
 //
+// Transmit (--tx): the app sends its microphone in Opus; nbd modulates USB
+// with WDSP and streams it to the AD9363 DAC, full duplex with reception
+// (see transmitter.h). --tx-file writes the IQ to a file instead.
+//
 // Offline, from a recording or stdin (768 kS/s around 10489.750 MHz):
 //   nbd --input capture.cs16 --freq 10489900000 --output audio.s16
 #include <atomic>
@@ -26,7 +30,10 @@
 #include <cstring>
 #include <chrono>
 #include <memory>
+#include <spawn.h>
 #include <string>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <thread>
 #include <vector>
 
@@ -36,6 +43,7 @@
 #include "pluto_source.h"
 #include "protocol.h"
 #include "spectrum.h"
+#include "transmitter.h"
 #include "ws_server.h"
 #include "wdsp_rx.h"
 
@@ -65,6 +73,12 @@ struct Options {
     bool loop = false;      // restart a file input at its end
     int dsp_size = 2048;    // WDSP block at 48 kHz
     std::string spectrum = "auto";  // waterfall: auto, maia, local, off
+    // Transmitter
+    bool tx = false;
+    double tx_lo_hz = 2399500000.0;
+    std::string tx_file;   // offline: IQ to a file instead of the DAC
+    double tx_max_s = 600.0;
+    std::string mqtt_host;  // Arduino PTT off when nbd stops a transmission itself
 };
 
 std::atomic<bool> g_stop{false};
@@ -85,6 +99,11 @@ void usage() {
                  "  --bitrate BPS    Opus bitrate (default 16000)\n"
                  "  --opus-complexity N  0..10 (default 5, lower saves CPU on the board)\n"
                  "  --spectrum S     waterfall source: auto (default: maia when live, else local), maia, local, off\n"
+                 "  --tx             SSB transmitter for the app (microphone over the WebSocket)\n"
+                 "  --tx-lo HZ       AD9363 TX LO, below the uplink (default 2399500000)\n"
+                 "  --tx-file FILE   write the transmitted IQ (cs16, 3.072 MS/s) to FILE instead of the DAC\n"
+                 "  --tx-max S       longest transmission (default 600)\n"
+                 "  --mqtt HOST      broker for arduino/ptt off when nbd cuts a transmission (default: the board)\n"
                  "  --dsp-size N     WDSP block at 48 kHz, 1024..8192 (default 2048; smaller = less delay)\n"
                  "  --realtime       read a file input at the real sample rate\n"
                  "  --loop           restart a file input at its end\n"
@@ -129,6 +148,11 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--loop") o.loop = true;
         else if (a == "--spectrum") o.spectrum = next("--spectrum");
         else if (a == "--dsp-size") o.dsp_size = std::atoi(next("--dsp-size"));
+        else if (a == "--tx") o.tx = true;
+        else if (a == "--tx-lo") o.tx_lo_hz = std::atof(next("--tx-lo"));
+        else if (a == "--tx-file") { o.tx_file = next("--tx-file"); o.tx = true; }
+        else if (a == "--tx-max") o.tx_max_s = std::atof(next("--tx-max"));
+        else if (a == "--mqtt") o.mqtt_host = next("--mqtt");
         else if (a == "--iiod-port") o.pluto.iiod_port = std::atoi(next("--iiod-port"));
         else if (a == "--http-port") o.pluto.http_port = std::atoi(next("--http-port"));
         else if (a == "--lnb-lo") o.pluto.lnb_lo_hz = std::atof(next("--lnb-lo"));
@@ -169,6 +193,15 @@ bool parse(int argc, char** argv, Options& o) {
         std::fprintf(stderr, "nbd: --spectrum maia needs --source pluto\n");
         return false;
     }
+    if (o.tx && o.ws_port <= 0) {
+        std::fprintf(stderr, "nbd: --tx needs --ws (the microphone comes from the app)\n");
+        return false;
+    }
+    if (o.tx && o.tx_file.empty() && o.source.empty()) {
+        std::fprintf(stderr, "nbd: --tx needs --source pluto, or --tx-file\n");
+        return false;
+    }
+    if (o.tx && o.mqtt_host.empty() && !o.source.empty()) o.mqtt_host = o.pluto.host;
     if (o.format != "cs16" && o.format != "cf32") {
         std::fprintf(stderr, "nbd: --format must be cs16 or cf32\n");
         return false;
@@ -191,6 +224,19 @@ bool read_file_block(FILE* f, const std::string& format, std::vector<nb::cf>& ou
     constexpr float k = 1.0f / 2048.0f;
     for (size_t i = 0; i < n; ++i) out[i] = nb::cf(raw[2 * i] * k, raw[2 * i + 1] * k);
     return true;
+}
+
+// Arduino PTT off through the board's mosquitto_pub, fire and forget (the
+// RF is already muted by then; this releases the PA relay too).
+void arduino_ptt_off(const std::string& host) {
+    if (host.empty()) return;
+    std::string h = host;
+    const char* argv[] = {"mosquitto_pub", "-h", h.c_str(), "-t", "arduino/ptt", "-m", "off", nullptr};
+    pid_t pid = 0;
+    if (posix_spawnp(&pid, "mosquitto_pub", nullptr, nullptr, const_cast<char* const*>(argv), environ) == 0) {
+        int status = 0;
+        waitpid(pid, &status, 0);
+    }
 }
 
 // Cuts the board's DMA buffers (16384 samples) into WDSP blocks.
@@ -289,6 +335,7 @@ int main(int argc, char** argv) {
     const double max_freq = o.center_hz + o.rate / 2 - 6000.0;
 
     std::unique_ptr<nb::WsServer> ws;
+    std::unique_ptr<nb::Transmitter> tx;
     std::unique_ptr<nb::OpusAudio> opus;
     uint16_t audio_seq = 0;
     bool opus_idle = true;
@@ -320,7 +367,44 @@ int main(int argc, char** argv) {
             opus = std::make_unique<nb::OpusAudio>(o.bitrate, o.opus_complexity);
             ws = std::make_unique<nb::WsServer>();
             ws->set_hello(nb::hello_json(o.center_hz, o.rate, min_freq, max_freq, live ? o.source : "file",
-                                         spectrum_source));
+                                         spectrum_source, o.tx));
+            if (o.tx) {
+                nb::TransmitterConfig tc;
+                tc.max_tx_s = o.tx_max_s;
+                nb::PlutoTxConfig pc;
+                pc.host = o.pluto.host;
+                pc.iiod_port = o.pluto.iiod_port;
+                pc.lo_hz = o.tx_lo_hz;
+                pc.expected_rate = static_cast<double>(o.pluto.input_rate);
+                const std::string tx_file = o.tx_file;
+                const double rate = static_cast<double>(o.pluto.input_rate);
+                const double lo = o.tx_lo_hz;
+                tx = std::make_unique<nb::Transmitter>(tc, [pc, tx_file, rate, lo]() -> std::unique_ptr<nb::TxSink> {
+                    if (!tx_file.empty()) return std::make_unique<nb::FileTxSink>(tx_file, rate, lo, true);
+                    return std::make_unique<nb::PlutoTx>(pc);
+                });
+                tx->set_dial(o.freq_hz);
+                nb::WsServer* server = ws.get();
+                const bool quiet = o.quiet;
+                const std::string mqtt = o.mqtt_host;
+                tx->on_status = [server, quiet](const nb::TxStatus& s) {
+                    static std::string last;
+                    server->broadcast_text(nb::tx_status_json(s));
+                    if (!quiet && s.state != last) {
+                        std::fprintf(stderr, "nbd: tx %s%s%s\n", s.state.c_str(), s.message.empty() ? "" : ": ",
+                                     s.message.c_str());
+                        last = s.state;
+                    }
+                };
+                tx->on_emergency = [mqtt](const std::string&) { arduino_ptt_off(mqtt); };
+                nb::Transmitter* t = tx.get();
+                ws->on_binary = [t](int client, const std::string& m) {
+                    uint16_t seq = 0;
+                    std::string opus;
+                    if (nb::parse_mic_packet(m, seq, opus)) t->mic_packet(client, seq, std::move(opus));
+                };
+                ws->on_close = [t](int client) { t->client_closed(client); };
+            }
             ws->start(o.ws_bind, o.ws_port);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "nbd: %s\n", e.what());
@@ -330,13 +414,15 @@ int main(int argc, char** argv) {
     }
     auto apply_commands = [&]() {
         std::string text, error;
-        while (ws && ws->next_command(text)) {
+        int client = 0;
+        while (ws && ws->next_command(text, client)) {
             error.clear();
             const nb::Command c = nb::parse_command(text, error);
             switch (c.type) {
             case nb::Command::Freq:
                 if (c.a < min_freq || c.a > max_freq) error = "freq outside the received band";
                 else station_offset = c.a - o.center_hz;
+                if (tx && error.empty()) tx->set_dial(c.a);
                 break;
             case nb::Command::Filter:
                 filter_low = c.a;
@@ -360,6 +446,22 @@ int main(int argc, char** argv) {
             }
             case nb::Command::Bitrate:
                 opus->set_bitrate(static_cast<int>(c.a));
+                break;
+            case nb::Command::Tx:
+                if (!tx) error = "this nbd has no transmitter (--tx)";
+                else error = tx->request(client, c.a != 0.0);
+                break;
+            case nb::Command::Tune:
+                if (!tx) error = "this nbd has no transmitter (--tx)";
+                else tx->set_tune(c.a != 0.0, c.b);
+                break;
+            case nb::Command::TxCal:
+                if (!tx) error = "this nbd has no transmitter (--tx)";
+                else tx->set_cal(c.a);
+                break;
+            case nb::Command::MicGain:
+                if (!tx) error = "this nbd has no transmitter (--tx)";
+                else tx->set_mic_gain_db(c.a);
                 break;
             case nb::Command::None:
                 break;
@@ -468,6 +570,7 @@ int main(int argc, char** argv) {
                 si.dropped = ws->dropped_audio_frames();
                 si.uptime_s = t;
                 ws->broadcast_text(nb::status_json(si));
+                if (tx) ws->broadcast_text(nb::tx_status_json(tx->status()));
             }
             if (!o.quiet)
                 std::fprintf(stderr,
@@ -484,6 +587,7 @@ int main(int argc, char** argv) {
                      total / o.rate / wall);
     }
     if (ws) ws->stop();
+    tx.reset();  // mutes the AD9363 and closes the TX buffer if it was on
     maia_wf.reset();
     if (pluto) {
         try {

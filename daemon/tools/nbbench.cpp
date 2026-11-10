@@ -16,7 +16,9 @@
 #include "beacon_lock.h"
 #include "opus_audio.h"
 #include "spectrum.h"
+#include "tx_dsp.h"
 #include "wdsp_rx.h"
+#include "wdsp_tx.h"
 
 namespace {
 
@@ -160,6 +162,37 @@ int main(int argc, char** argv) {
         report("Opus 16 kbit/s, complexity 5", since(t), all_audio.size() / 48000.0);
         std::printf("  %zu packets, %llu non-finite samples replaced\n", packets,
                     static_cast<unsigned long long>(enc.bad_samples()));
+    }
+    {
+        // Transmit path, on top of reception while transmitting (full duplex).
+        std::vector<float> mic(48000 * static_cast<size_t>(secs));
+        for (size_t i = 0; i < mic.size(); ++i) mic[i] = 0.3f * static_cast<float>(std::sin(2 * kPi * 900.0 * i / 48000.0));
+        nb::OpusAudio menc(24000, 5);
+        std::vector<std::string> packets;
+        menc.push(mic.data(), mic.size(), [&](const std::string& p) { packets.push_back(p); });
+        nb::OpusMicDecoder dec;
+        std::vector<float> pcm;
+        auto t = clk::now();
+        for (const auto& p : packets) dec.decode(p, pcm);
+        report("TX: Opus decode (microphone)", since(t), secs);
+        pcm.resize(mic.size());
+        nb::WdspTx tx(2, 512, 1024);
+        std::vector<nb::cf> base, all_base;
+        t = clk::now();
+        for (size_t b = 0; b + 512 <= pcm.size(); b += 512) {
+            tx.process(&pcm[b], base);
+            all_base.insert(all_base.end(), base.begin(), base.end());
+        }
+        report("TX: WDSP USB modulator at 48k", since(t), secs);
+        nb::Upconverter up(3072000.0);
+        up.set_offset_hz(800000.0);
+        std::vector<int16_t> iq16;
+        t = clk::now();
+        for (size_t b = 0; b + 512 <= all_base.size(); b += 512) {
+            iq16.clear();
+            up.process(&all_base[b], 512, iq16);
+        }
+        report("TX: upconverter to 3.072 MS/s", since(t), all_base.size() / 48000.0);
     }
     std::printf("total of the tracking path must stay well above 1x\n");
     return 0;

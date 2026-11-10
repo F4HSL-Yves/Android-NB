@@ -63,4 +63,33 @@ void OpusAudio::push(const float* pcm, size_t n, const std::function<void(const 
     buf_.erase(buf_.begin(), buf_.begin() + static_cast<long>(pos));
 }
 
+OpusMicDecoder::OpusMicDecoder() {
+    int err = 0;
+    dec_ = opus_decoder_create(OpusAudio::kRate, 1, &err);
+    if (err != OPUS_OK || !dec_) throw std::runtime_error(std::string("opus decoder: ") + opus_strerror(err));
+    scratch_.resize(5760);  // 120 ms, the longest Opus frame
+}
+
+OpusMicDecoder::~OpusMicDecoder() {
+    if (dec_) opus_decoder_destroy(dec_);
+}
+
+bool OpusMicDecoder::decode(const std::string& packet, std::vector<float>& out) {
+    if (packet.empty()) return false;
+    const int n = opus_decode_float(dec_, reinterpret_cast<const unsigned char*>(packet.data()),
+                                    static_cast<opus_int32>(packet.size()), scratch_.data(),
+                                    static_cast<int>(scratch_.size()), 0);
+    if (n <= 0) return false;
+    out.insert(out.end(), scratch_.begin(), scratch_.begin() + n);
+    return true;
+}
+
+void OpusMicDecoder::conceal(std::vector<float>& out) {
+    const int n = opus_decode_float(dec_, nullptr, 0, scratch_.data(), OpusAudio::kFrame, 0);
+    if (n > 0) out.insert(out.end(), scratch_.begin(), scratch_.begin() + n);
+    else out.insert(out.end(), OpusAudio::kFrame, 0.0f);
+}
+
+void OpusMicDecoder::reset() { opus_decoder_ctl(dec_, OPUS_RESET_STATE); }
+
 }  // namespace nb

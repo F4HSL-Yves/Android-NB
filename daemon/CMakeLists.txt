@@ -16,7 +16,7 @@ add_executable(nbsynth tools/nbsynth.cpp)
 install(TARGETS nbsynth RUNTIME DESTINATION bin)
 
 # Core DSP: no external dependency, unit tested on any host.
-add_library(nbcore STATIC src/dsp.cpp src/beacon_lock.cpp src/spectrum.cpp)
+add_library(nbcore STATIC src/dsp.cpp src/beacon_lock.cpp src/spectrum.cpp src/tx_dsp.cpp)
 target_include_directories(nbcore PUBLIC src)
 # Fast float math: lets GCC vectorize the FIR loops (NEON on the Zynq, which
 # is not IEEE compliant) and inline complex products. The DSP never relies
@@ -24,7 +24,8 @@ target_include_directories(nbcore PUBLIC src)
 target_compile_options(nbcore PRIVATE -Wall -Wextra -O3 -ffast-math)
 
 # Board access over TCP: iiod (AD9363, DMA) and maia-httpd (DDC).
-add_library(nbpluto STATIC src/iiod_client.cpp src/http_client.cpp src/pluto_source.cpp src/maia_waterfall.cpp)
+add_library(nbpluto STATIC src/iiod_client.cpp src/http_client.cpp src/pluto_source.cpp src/pluto_tx.cpp
+            src/maia_waterfall.cpp)
 target_include_directories(nbpluto PUBLIC src)
 target_link_libraries(nbpluto PUBLIC nbcore Threads::Threads)
 target_compile_options(nbpluto PRIVATE -Wall -Wextra)
@@ -62,12 +63,12 @@ if(NBD_WITH_WDSP)
   target_link_libraries(nbnet PUBLIC nbpluto Opus::opus Threads::Threads)
   target_compile_options(nbnet PRIVATE -Wall -Wextra)
 
-  add_executable(nbd src/main.cpp src/wdsp_rx.cpp)
+  add_executable(nbd src/main.cpp src/wdsp_rx.cpp src/wdsp_tx.cpp src/transmitter.cpp)
   target_link_libraries(nbd PRIVATE nbnet wdsp)
   target_compile_options(nbd PRIVATE -Wall -Wextra)
   install(TARGETS nbd RUNTIME DESTINATION bin)
 
-  add_executable(nbbench tools/nbbench.cpp src/wdsp_rx.cpp)
+  add_executable(nbbench tools/nbbench.cpp src/wdsp_rx.cpp src/wdsp_tx.cpp)
   target_link_libraries(nbbench PRIVATE nbnet wdsp)
   install(TARGETS nbbench RUNTIME DESTINATION bin)
 
@@ -78,5 +79,8 @@ if(NBD_WITH_WDSP)
     add_executable(test_ws tests/test_ws.cpp)
     target_link_libraries(test_ws nbnet)
     add_test(NAME websocket COMMAND test_ws)
+    add_executable(test_tx tests/test_tx.cpp src/wdsp_tx.cpp src/transmitter.cpp)
+    target_link_libraries(test_tx nbnet wdsp)
+    add_test(NAME transmitter COMMAND test_tx)
   endif()
 endif()

@@ -99,4 +99,36 @@ class NbProtocolTest {
             NbProtocol.spectrumCommand(0, 520000, 1024, 8.0),
         )
     }
+
+    @Test
+    fun transmitMessages() {
+        val hello = NbProtocol.parse(
+            """{"type":"hello","version":1,"center":10489750000,"rate":768000,"min_freq":1,"max_freq":2,""" +
+                """"audio":{"codec":"opus"},"source":"pluto","spectrum":{"source":"maia","max_bins":2048},"tx":true}""",
+        ) as NbProtocol.HelloMessage
+        assertTrue(hello.hello.tx)
+        assertEquals("maia", hello.hello.spectrumSource)
+        val noTx = NbProtocol.parse("""{"type":"hello","version":1,"spectrum":{"source":"off"},"tx":false}""")
+        assertTrue(!(noTx as NbProtocol.HelloMessage).hello.tx)
+
+        val m = NbProtocol.parse(
+            """{"type":"tx","state":"on","message":"","owner":3,"uplink":2400300000,"lo":2399500000,"cal":-120,""" +
+                """"tune":true,"mic":-12.5,"alc":-3.0,"out":-1.2,"underruns":2,"dropped":0,"on_s":4.5}""",
+        ) as NbProtocol.TxMessage
+        assertEquals("on", m.tx.state)
+        assertEquals(2_400_300_000L, m.tx.uplinkHz)
+        assertEquals(2_399_500_000L, m.tx.loHz)
+        assertEquals(-120.0, m.tx.calHz, 1e-9)
+        assertTrue(m.tx.tune)
+        assertEquals(-12.5, m.tx.micDb, 1e-9)
+        assertEquals(2L, m.tx.underruns)
+        val off = NbProtocol.parse("""{"type":"tx","state":"off","message":"phone disconnected","tune":false}""")
+        assertEquals("phone disconnected", (off as NbProtocol.TxMessage).tx.message)
+
+        val p = NbProtocol.micPacket(0x1234, byteArrayOf(9, 8))
+        assertEquals(listOf<Byte>(3, 0x12, 0x34, 9, 8), p.toList())
+        assertEquals("""{"cmd":"tx","on":1}""", NbProtocol.txCommand(true))
+        assertEquals("""{"cmd":"tune","on":0,"hz":1000}""", NbProtocol.tuneCommand(false))
+        assertEquals("""{"cmd":"txcal","hz":-120}""", NbProtocol.txCalCommand(-120))
+    }
 }

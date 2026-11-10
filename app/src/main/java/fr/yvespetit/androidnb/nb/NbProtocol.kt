@@ -11,6 +11,7 @@ object NbProtocol {
     const val VERSION = 1
     const val AUDIO_OPUS: Byte = 0x01
     const val SPECTRUM_LINE: Byte = 0x02
+    const val MIC_OPUS: Byte = 0x03
 
     data class Hello(
         val version: Int,
@@ -21,6 +22,23 @@ object NbProtocol {
         val source: String,
         /** Where nbd takes the waterfall from: "maia", "local" or "off". */
         val spectrumSource: String = "off",
+        /** nbd runs with --tx: the app may transmit. */
+        val tx: Boolean = false,
+    )
+
+    /** Transmitter state, sent by nbd on each change and every 200 ms while on. */
+    data class TxStatus(
+        val state: String,
+        val message: String,
+        val uplinkHz: Long,
+        val loHz: Long,
+        val calHz: Double,
+        val tune: Boolean,
+        val micDb: Double,
+        val alcDb: Double,
+        val outDb: Double,
+        val underruns: Long,
+        val onS: Double,
     )
 
     data class Status(
@@ -45,6 +63,7 @@ object NbProtocol {
     data class HelloMessage(val hello: Hello) : Message
     data class StatusMessage(val status: Status) : Message
     data class ErrorMessage(val text: String) : Message
+    data class TxMessage(val tx: TxStatus) : Message
     data class Unknown(val raw: String) : Message
 
     class AudioPacket(val seq: Int, val opus: ByteArray)
@@ -80,6 +99,22 @@ object NbProtocol {
                 spectrumSource = text.indexOf("\"spectrum\"").let { i ->
                     if (i < 0) "off" else string(text.substring(i + 1), "source") ?: "off"
                 },
+                tx = text.contains("\"tx\":true"),
+            ),
+        )
+        "tx" -> TxMessage(
+            TxStatus(
+                state = string(text, "state") ?: "off",
+                message = string(text, "message") ?: "",
+                uplinkHz = number(text, "uplink")?.toLong() ?: 0L,
+                loHz = number(text, "lo")?.toLong() ?: 0L,
+                calHz = number(text, "cal") ?: 0.0,
+                tune = text.contains("\"tune\":true"),
+                micDb = number(text, "mic") ?: -200.0,
+                alcDb = number(text, "alc") ?: 0.0,
+                outDb = number(text, "out") ?: -200.0,
+                underruns = number(text, "underruns")?.toLong() ?: 0L,
+                onS = number(text, "on_s") ?: 0.0,
             ),
         )
         "status" -> {
@@ -134,6 +169,15 @@ object NbProtocol {
         if (span <= 0 || step == 0) return null
         return SpectrumLine(seq, center, span, ref / 10f, step / 10f, frame.copyOfRange(14, frame.size))
     }
+
+    /** Binary frame: 0x03, sequence (uint16 big endian), one Opus packet of the microphone. */
+    fun micPacket(seq: Int, opus: ByteArray): ByteArray =
+        byteArrayOf(MIC_OPUS, (seq shr 8).toByte(), seq.toByte()) + opus
+
+    fun txCommand(on: Boolean) = """{"cmd":"tx","on":${if (on) 1 else 0}}"""
+    fun tuneCommand(on: Boolean, hz: Int = 1000) = """{"cmd":"tune","on":${if (on) 1 else 0},"hz":$hz}"""
+    fun txCalCommand(hz: Int) = """{"cmd":"txcal","hz":$hz}"""
+    fun micGainCommand(db: Int) = """{"cmd":"micgain","db":$db}"""
 
     fun freqCommand(hz: Long) = """{"cmd":"freq","hz":$hz}"""
     fun filterCommand(lowHz: Int, highHz: Int) = """{"cmd":"filter","low":$lowHz,"high":$highHz}"""

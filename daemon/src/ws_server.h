@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -47,6 +48,14 @@ public:
     void broadcast_spectrum(const std::string& payload);
     // Next text message from any client; false when none is waiting.
     bool next_command(std::string& text);
+    // Same, with the id of the client that sent it.
+    bool next_command(std::string& text, int& client);
+
+    // Set before start(); both run on the server thread and must be quick.
+    // Binary messages from a client (microphone packets).
+    std::function<void(int client, const std::string& payload)> on_binary;
+    // A client that completed the handshake went away.
+    std::function<void(int client)> on_close;
 
     int clients() const { return clients_.load(); }
     uint64_t dropped_audio_frames() const { return dropped_.load(); }
@@ -58,6 +67,7 @@ public:
 private:
     struct Client {
         int fd = -1;
+        int id = 0;
         bool open = false;     // handshake done
         bool closing = false;  // close after flushing out
         std::string in, out, message;
@@ -88,7 +98,8 @@ private:
 
     std::mutex mu_;  // guards pending_, commands_, hello_
     std::vector<Outgoing> pending_;
-    std::deque<std::string> commands_;
+    std::deque<std::pair<int, std::string>> commands_;
+    int next_id_ = 1;
     std::string hello_;
     std::vector<Client> list_;  // server thread only
 };

@@ -31,8 +31,10 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -78,6 +80,13 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Listening session: keep the screen on (background playback comes with a service later).
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    override fun onStop() {
+        // Like Android-DATV: no transmission from an app in the background
+        // (Android also cuts the microphone there).
+        connection.pttOff()
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -260,6 +269,9 @@ private fun MainScreen(c: NbConnection) {
             Button(onClick = { Qo100.parseMHz(dialText)?.let { tuneTo(it) } }) { Text("OK") }
         }
 
+        // Transmit (nbd started with --tx)
+        if (hello?.tx == true) TxPanel(c, dial, connected)
+
         // Beacon lock and signal
         BeaconPanel(status)
         SMeter(status?.signalDb)
@@ -360,5 +372,135 @@ private fun <T> ChipRow(title: String, items: List<T>, selected: T?, label: (T) 
         items.forEach { item ->
             FilterChip(selected = item == selected, onClick = { onPick(item) }, label = { Text(label(item)) })
         }
+    }
+}
+
+@Composable
+private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
+    var arduino by rememberSaveable { mutableStateOf(prefs.getBoolean("arduino", true)) }
+    var calText by rememberSaveable { mutableStateOf(prefs.getInt("tx_cal", 0).toString()) }
+    var gain by remember { mutableFloatStateOf(-30f) }
+    var gainTouched by remember { mutableStateOf(false) }
+    var tune by remember { mutableStateOf(false) }
+    var micError by remember { mutableStateOf<String?>(null) }
+    c.arduinoPresent = arduino
+    // Follow the board's gain until the user moves the slider.
+    LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
+    // nbd forgets the correction when it restarts: send it on each connection.
+    LaunchedEffect(connected) { if (connected) c.setTxCal(prefs.getInt("tx_cal", 0)) }
+
+    val uplink = Qo100.uplinkFor(dial)
+    val allowed = Qo100.isTransmitAllowed(uplink)
+    val active = c.ptt != NbConnection.Ptt.OFF
+    val micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        micError = if (granted) null else "Micro refusé : autorise le micro pour QO-100 NB dans les réglages."
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .background(if (c.ptt == NbConnection.Ptt.ON) Color(0x55C62828) else Color(0xFF1E1E1E)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Émission", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Text(Qo100.formatMHz(uplink), fontFamily = FontFamily.Monospace)
+        }
+        Button(
+            onClick = {
+                when {
+                    active -> c.pttOff()
+                    !micGranted -> micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    else -> c.pttOn()
+                }
+            },
+            enabled = active || (connected && c.mqttUp && allowed),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (active) Color(0xFFC62828) else Color(0xFF2E7D32),
+                contentColor = Color.White,
+            ),
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+        ) {
+            Text(
+                when (c.ptt) {
+                    NbConnection.Ptt.OFF -> "PTT"
+                    NbConnection.Ptt.STARTING -> "PTT… (annuler)"
+                    NbConnection.Ptt.ON -> "EN ÉMISSION · couper"
+                    NbConnection.Ptt.STOPPING -> "Arrêt…"
+                },
+                fontSize = 18.sp,
+            )
+        }
+        val line = when {
+            !allowed -> "Fréquence hors de la zone d'émission (balises et bords du transpondeur)"
+            c.pttMessage.isNotEmpty() -> c.pttMessage
+            else -> "Prêt"
+        }
+        Text(line, style = MaterialTheme.typography.bodySmall,
+            color = if (c.ptt == NbConnection.Ptt.OFF && c.pttMessage.isNotEmpty()) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurface)
+        micError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(String.format(Locale.FRANCE, "Gain %.0f dB", gain), modifier = Modifier.width(96.dp),
+                style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = gain, valueRange = -50f..0f, steps = 49,
+                onValueChange = {
+                    gain = Math.round(it).toFloat()
+                    gainTouched = true
+                },
+                onValueChangeFinished = { c.setTxGain(gain.toInt()) },
+                enabled = c.mqttUp && c.callsign != null,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = tune, onClick = {
+                tune = !tune
+                c.setTune(tune)
+            }, label = { Text("Porteuse 1 kHz") })
+            Text("Arduino", style = MaterialTheme.typography.bodySmall)
+            Switch(checked = arduino, enabled = !active, onCheckedChange = {
+                arduino = it
+                prefs.edit().putBoolean("arduino", it).apply()
+            })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = calText, onValueChange = { calText = it.filter { ch -> ch.isDigit() || ch == '-' } },
+                label = { Text("Correction TX (Hz)") }, singleLine = true, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+            Button(onClick = {
+                calText.toIntOrNull()?.coerceIn(-50000, 50000)?.let {
+                    prefs.edit().putInt("tx_cal", it).apply()
+                    c.setTxCal(it)
+                }
+            }) { Text("OK") }
+        }
+
+        val tx = c.tx
+        val board = buildList {
+            c.callsign?.let { add(it) }
+            c.txMuted?.let { add(if (it) "RF coupée" else "RF active") }
+            c.arduinoPtt?.let { add("Arduino PTT " + if (it) "on" else "off") }
+            c.paTempC?.let { add(String.format(Locale.FRANCE, "PA %.1f °C", it)) }
+        }
+        if (board.isNotEmpty()) Text(board.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
+        if (tx != null && tx.state == "on") {
+            Text(
+                String.format(
+                    Locale.FRANCE, "Micro %.0f dB • ALC %.1f dB • sortie %.1f dB • %.0f s",
+                    tx.micDb, tx.alcDb, tx.outDb, tx.onS,
+                ) + if (tx.underruns > 0) " • trous ${tx.underruns}" else "",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Text(
+            "Full duplex : avec le haut-parleur, ta propre voix revient du satellite dans le micro. Casque conseillé.",
+            style = MaterialTheme.typography.bodySmall, color = Color(0xFF9E9E9E),
+        )
     }
 }
