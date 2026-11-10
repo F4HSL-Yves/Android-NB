@@ -332,6 +332,9 @@ int main(int argc, char** argv) {
     double filter_low = 200.0, filter_high = 2800.0;
     int agc = 3;
     int nr = 0;
+    // NR in force: suspended while transmitting, the board has no CPU left
+    // for it then (EMNR alone takes 85 % of a Cortex-A9 core).
+    int nr_applied = 0;
     // Keep the station and its passband inside the IQ bandwidth.
     const double min_freq = o.center_hz - o.rate / 2 + 3000.0;
     const double max_freq = o.center_hz + o.rate / 2 - 6000.0;
@@ -436,7 +439,7 @@ int main(int argc, char** argv) {
                 break;
             case nb::Command::Nr:
                 nr = static_cast<int>(c.a);
-                rx.set_nr(nr);
+                nr_applied = -1;  // applied below, unless transmitting
                 break;
             case nb::Command::Agc:
                 agc = static_cast<int>(c.a);
@@ -528,6 +531,14 @@ int main(int argc, char** argv) {
     };
     while (next_block()) {
         apply_commands();
+        {
+            const bool txing = tx && tx->status().state != "off" && tx->status().state != "error";
+            const int want = txing ? 0 : nr;
+            if (want != nr_applied) {
+                rx.set_nr(want);
+                nr_applied = want;
+            }
+        }
         lock.process(iq.data(), iq.size());
         // Before the first lock the correction is 0 (nominal LNB); after a
         // loss it keeps the last estimate.
