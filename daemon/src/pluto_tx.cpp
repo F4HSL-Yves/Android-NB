@@ -98,6 +98,24 @@ void PlutoTx::open() {
     if (std::fabs(lo_ - cfg_.lo_hz) > 1000.0)
         throw IiodError("the AD9363 refused TX LO " + std::string(buf) + " Hz");
 
+    // The DAC path of the FPGA has an x8 interpolator (for rates below
+    // ~520 kS/s). Something on the board (pluto_stream's DATV setup) can
+    // leave it on behind the driver's back: the attribute still reads
+    // 3071999 while the DMA drains at 384 kS/s (measured on the FishBall).
+    // Writing the low rate then the full one makes the driver program it
+    // again; the Transmitter checks the real pace anyway.
+    {
+        const auto& d0 = find_channel(dds_, "voltage0", true);
+        char lo_rate[32], full[32];
+        std::snprintf(lo_rate, sizeof lo_rate, "%.0f", std::floor(rate_ / 8.0));
+        std::snprintf(full, sizeof full, "%.0f", std::floor(rate_));
+        try {
+            iiod_.write_channel_attr(dds_, d0, "sampling_frequency", lo_rate);
+        } catch (const IiodError&) {
+        }
+        iiod_.write_channel_attr(dds_, d0, "sampling_frequency", full);
+    }
+
     if (cfg_.local_dma && is_loopback(cfg_.host)) {
         sysfs_ = find_local_iio_device("cf-ad9361-dds-core-lpc");
         if (!sysfs_.empty() && ::access(("/dev/" + sysfs_.substr(sysfs_.rfind('/') + 1)).c_str(), W_OK) == 0 &&

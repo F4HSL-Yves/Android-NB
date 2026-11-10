@@ -211,7 +211,8 @@ void Transmitter::run() {
         auto next_meter = started;
         std::string end_state = "off", end_message;
         bool emergency = false;
-        uint64_t written = 0;
+        uint64_t written = 0, pace_w = 0;
+        double pace_t = -1;
         try {
             while (true) {
                 double dial, cal;
@@ -267,6 +268,30 @@ void Transmitter::run() {
                 up->process(base.data(), base.size(), iq);
                 sink->write(iq.data(), iq.size() / 2);
                 written += iq.size() / 2;
+
+                // The DAC paces this loop: a wrong pace means the FPGA is not
+                // at the rate the IQ were made for (its x8 interpolator left
+                // on puts the signal at offset/8, outside the band). Checked
+                // over each second, after the first half second (the
+                // kernel blocks fill without waiting).
+                {
+                    const double el = seconds_since(started);
+                    if (pace_t < 0) {
+                        if (el >= 0.5) pace_t = el, pace_w = written;
+                    } else if (el - pace_t >= 1.0) {
+                        const double sps = static_cast<double>(written - pace_w) / (el - pace_t);
+                        if (std::fabs(sps - sink->rate()) > 0.1 * sink->rate()) {
+                            char m[160];
+                            std::snprintf(m, sizeof m, "the DAC takes %.0f S/s instead of %.0f: transmission stopped",
+                                          sps, sink->rate());
+                            end_state = "error";
+                            end_message = m;
+                            emergency = true;
+                            break;
+                        }
+                        pace_t = el, pace_w = written;
+                    }
+                }
 
                 const auto now = Clock::now();
                 if (now >= next_meter) {

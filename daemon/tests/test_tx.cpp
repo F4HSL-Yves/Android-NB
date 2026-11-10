@@ -229,6 +229,7 @@ struct FakeDac : nb::TxSink {
         std::vector<int16_t> iq;
         int opens = 0, closes = 0, mutes = 0;
         std::string fail;  // open() throws this when set
+        double pace = 1.0; // fraction of rate_ the fake DAC really drains
     };
     Log& log;
     double rate_ = 3072000.0, lo_ = 2399500000.0;
@@ -250,8 +251,13 @@ struct FakeDac : nb::TxSink {
             if (log.iq.size() < 2 * 4000000) log.iq.insert(log.iq.end(), iq, iq + 2 * samples);
         }
         written += samples;
+        double pace;
+        {
+            std::lock_guard<std::mutex> lk(log.mu);
+            pace = log.pace;
+        }
         std::this_thread::sleep_until(t0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                               std::chrono::duration<double>(written / rate_)));
+                                               std::chrono::duration<double>(written / (rate_ * pace))));
     }
     void close() override {
         std::lock_guard<std::mutex> lk(log.mu);
@@ -353,6 +359,24 @@ void test_transmitter() {
     tx.request(1, true);
     CHECK(wait_for([&] { return tx.status().state == "error"; }, 2.0), "error state: %s", tx.status().state.c_str());
     CHECK(tx.status().message == "TX DMA busy", "message %s", tx.status().message.c_str());
+
+    // The FPGA drains at 1/8 of the rate (x8 interpolator left on): stop.
+    {
+        std::lock_guard<std::mutex> lk(log.mu);
+        log.fail.clear();
+        log.pace = 0.125;
+    }
+    const int before = emergencies;
+    CHECK(tx.request(1, true).empty(), "slow DAC transmission");
+    CHECK(wait_for([&] { return tx.status().state != "error"; }, 2.0), "slow DAC starts");
+    const auto t1 = std::chrono::steady_clock::now();
+    for (int k = 0; k < 150 && tx.status().state != "error"; ++k) {
+        tx.mic_packet(1, seq++, std::string("\xf8\xff\xfe", 3));
+        std::this_thread::sleep_until(t1 + std::chrono::milliseconds(20 * (k + 1)));
+    }
+    CHECK(tx.status().state == "error" && tx.status().message.find("the DAC takes") == 0, "slow DAC: %s %s",
+          tx.status().state.c_str(), tx.status().message.c_str());
+    CHECK(emergencies == before + 1, "slow DAC is an emergency");
 }
 
 }  // namespace

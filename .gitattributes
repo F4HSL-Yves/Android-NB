@@ -1,0 +1,2 @@
+*.sh text eol=lf
+board/* text eol=lf
