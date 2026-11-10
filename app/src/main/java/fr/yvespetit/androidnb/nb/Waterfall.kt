@@ -7,8 +7,9 @@ import kotlin.math.roundToInt
  * Kotlin (pixels as ARGB ints) so it is testable on the JVM.
  *
  * Rows form a ring: the newest row is at [head], older rows follow, wrapping
- * at [rows]. A change of view (zoom, pan, bins) clears the image, because
- * old rows would no longer line up with the frequency axis.
+ * at [rows]. A change of view (zoom, pan, bins) resamples the old rows onto
+ * the new frequency axis, so the history stays in place while new rows come
+ * in (parts that were outside the old view are black).
  *
  * Colours follow the noise floor automatically: the floor (20th percentile
  * of a row, smoothed) is dark blue, and [rangeDb] above it is white.
@@ -49,12 +50,17 @@ class Waterfall(val rows: Int = 240) {
         val key = Triple(line.centerOffsetHz, line.spanHz, line.bins)
         if (key != viewKey || line.bins != width) {
             viewKey = key
-            width = line.bins
-            pixels = IntArray(width * rows)
-            head = 0
-            spanHz = line.spanHz
-            leftHz = bandCenterHz + line.centerOffsetHz - line.spanHz / 2
-            clear()
+            val newLeft = bandCenterHz + line.centerOffsetHz - line.spanHz / 2
+            if (width > 0 && spanHz > 0 && filled > 0) {
+                remap(newLeft, line.spanHz, line.bins)
+            } else {
+                width = line.bins
+                pixels = IntArray(width * rows)
+                head = 0
+                spanHz = line.spanHz
+                leftHz = newLeft
+                clear()
+            }
         }
         val db = FloatArray(width) { if (line.hasData(it)) line.db(it) else Float.NaN }
         val sorted = db.filter { !it.isNaN() }.sorted()
@@ -76,6 +82,31 @@ class Waterfall(val rows: Int = 240) {
             trace[k] = if (t.isNaN() || d.isNaN()) d else t * 0.5f + d * 0.5f
         }
         lines++
+    }
+
+    /** Moves the image and trace onto a new view: column k takes the old column at the same frequency. */
+    private fun remap(newLeft: Long, newSpan: Int, newWidth: Int) {
+        val src = IntArray(newWidth) { k ->
+            val f = newLeft + (k + 0.5) * newSpan / newWidth
+            val o = Math.floor((f - leftHz) / spanHz * width).toInt()
+            if (o in 0 until width) o else -1
+        }
+        val old = pixels
+        val oldW = width
+        pixels = IntArray(newWidth * rows)
+        for (r in 0 until rows) {
+            val ob = r * oldW
+            val nb = r * newWidth
+            for (k in 0 until newWidth) {
+                val o = src[k]
+                pixels[nb + k] = if (o < 0) PALETTE[0] else old[ob + o]
+            }
+        }
+        val oldTrace = trace
+        trace = FloatArray(newWidth) { k -> src[k].let { if (it < 0) Float.NaN else oldTrace[it] } }
+        width = newWidth
+        leftHz = newLeft
+        spanHz = newSpan
     }
 
     /** Frequency (Hz) at a horizontal fraction 0..1 of the view. */

@@ -36,14 +36,29 @@ class WaterfallTest {
     }
 
     @Test
-    fun viewChangeClears() {
+    fun viewChangeKeepsHistory() {
         val w = Waterfall(rows = 8)
         repeat(3) { w.add(line(0, 768000, IntArray(32) { 20 }), 10_489_750_000L) }
         w.add(line(120000, 24000, IntArray(32) { 20 }), 10_489_750_000L)
-        assertEquals(1, w.filled)
+        assertEquals(4, w.filled)
         assertEquals(10_489_750_000L + 120_000L - 12_000L, w.leftHz)
         assertEquals(10_489_870_000L, w.freqAt(0.5f))
         assertEquals(0.5f, w.fractionOf(10_489_870_000L), 1e-6f)
+    }
+
+    @Test
+    fun zoomResamplesOldRows() {
+        val w = Waterfall(rows = 8)
+        val v = IntArray(64) { 20 }
+        v[40] = 100  // carrier at centre + 102 kHz
+        repeat(3) { w.add(line(0, 768000, v), 10_489_750_000L) }
+        val bright = w.pixels[w.head * w.width + 40]
+        // Zoom to 24 kHz around the carrier: the old rows keep it under column 16.
+        w.add(line(102000, 24000, IntArray(32) { 20 }), 10_489_750_000L)
+        val oldRow = ((w.head + 1) % w.rows) * w.width
+        assertEquals(32, w.width)
+        assertEquals(bright, w.pixels[oldRow + 16])
+        assertNotEquals(bright, w.pixels[oldRow + 2])
     }
 
     private fun brightness(argb: Int) = ((argb shr 16) and 0xFF) + ((argb shr 8) and 0xFF) + (argb and 0xFF)

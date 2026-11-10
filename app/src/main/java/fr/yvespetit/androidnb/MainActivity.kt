@@ -246,6 +246,8 @@ private fun MainScreen(c: NbConnection) {
                 waterfall = c.waterfall, version = c.waterfallVersion, dialHz = dial,
                 filterLowHz = filterLow, filterHighHz = filterHigh, onTune = { tuneTo(it) },
                 onZoom = { f -> span = kotlin.math.round(span / f).toInt().coerceIn(MIN_SPAN_HZ, spans[0].first) },
+                viewLeftHz = (if (viewCenter != 0L) viewCenter else hello.centerHz) - span / 2,
+                viewSpanHz = span,
                 modifier = Modifier.onSizeChanged { bandWidthPx = it.width },
             )
         }

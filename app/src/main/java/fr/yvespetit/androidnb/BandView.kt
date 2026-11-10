@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -53,8 +54,14 @@ fun BandView(
     filterHighHz: Int,
     onTune: (Long) -> Unit,
     onZoom: (Float) -> Unit,
+    viewLeftHz: Long = 0L,
+    viewSpanHz: Int = 0,
     modifier: Modifier = Modifier,
 ) {
+    // The requested view (follows the fingers at once); the waterfall rows
+    // are drawn where they belong in it until the board sends the new view.
+    val view = if (viewSpanHz > 0) BandAxis(viewLeftHz, viewSpanHz) else BandAxis(waterfall.leftHz, waterfall.spanHz)
+    val viewNow by rememberUpdatedState(view)
     val tune by rememberUpdatedState(onTune)
     val zoom by rememberUpdatedState(onZoom)
     val dial by rememberUpdatedState(dialHz)
@@ -65,8 +72,8 @@ fun BandView(
         modifier = modifier.fillMaxWidth().height(300.dp).background(Color.Black)
             .pointerInput(waterfall) {
                 detectTapGestures { p ->
-                    if (waterfall.spanHz > 0) {
-                        val f = waterfall.freqAt(p.x / size.width) - passbandMid
+                    if (viewNow.spanHz > 0) {
+                        val f = viewNow.freqAt(p.x / size.width) - passbandMid
                         tune((f / 100.0).roundToInt() * 100L)
                     }
                 }
@@ -102,9 +109,10 @@ fun BandView(
                             drag[0] = dial.toDouble()
                         }
                         ch.consume()
-                        if (waterfall.spanHz > 0 && dx != 0f) {
-                            drag[0] -= dx.toDouble() / size.width * waterfall.spanHz
-                            val step = if (waterfall.spanHz > 100_000) 100.0 else 10.0
+                        val vs = viewNow.spanHz
+                        if (vs > 0 && dx != 0f) {
+                            drag[0] -= dx.toDouble() / size.width * vs
+                            val step = if (vs > 100_000) 100.0 else 10.0
                             tune(((drag[0] / step).roundToInt() * step).toLong())
                         }
                     }
@@ -114,18 +122,29 @@ fun BandView(
         Canvas(modifier = Modifier.fillMaxWidth().height(300.dp)) {
             if (version < 0) return@Canvas  // reading version redraws on each new row
             val traceH = size.height * 0.3f
-            drawWaterfall(waterfall, holder, traceH)
-            drawTrace(waterfall, traceH)
-            drawMarkers(waterfall, dialHz, filterLowHz, filterHighHz)
+            val x0 = view.fractionOf(waterfall.leftHz) * size.width
+            val x1 = view.fractionOf(waterfall.leftHz + waterfall.spanHz) * size.width
+            drawRect(Color(0xFF0A0F1A), size = Size(size.width, traceH))
+            clipRect {
+                drawWaterfall(waterfall, holder, traceH, x0, x1)
+                drawTrace(waterfall, traceH, x0, x1)
+            }
+            drawMarkers(view, dialHz, filterLowHz, filterHighHz)
         }
     }
+}
+
+/** Horizontal frequency axis of the display. */
+private class BandAxis(val leftHz: Long, val spanHz: Int) {
+    fun freqAt(fraction: Float): Long = leftHz + kotlin.math.round(fraction.toDouble() * spanHz).toLong()
+    fun fractionOf(hz: Long): Float = if (spanHz == 0) 0f else ((hz - leftHz).toDouble() / spanHz).toFloat()
 }
 
 private class BitmapHolder {
     var bitmap: Bitmap? = null
 }
 
-private fun DrawScope.drawWaterfall(w: Waterfall, holder: BitmapHolder, top: Float) {
+private fun DrawScope.drawWaterfall(w: Waterfall, holder: BitmapHolder, top: Float, x0: Float, x1: Float) {
     if (w.width == 0 || w.filled == 0) return
     var bmp = holder.bitmap
     if (bmp == null || bmp.width != w.width || bmp.height != w.rows) {
@@ -139,20 +158,19 @@ private fun DrawScope.drawWaterfall(w: Waterfall, holder: BitmapHolder, top: Flo
     val first = minOf(w.rows - w.head, w.filled)
     drawImage(
         img, srcOffset = IntOffset(0, w.head), srcSize = IntSize(w.width, first),
-        dstOffset = IntOffset(0, top.roundToInt()), dstSize = IntSize(size.width.roundToInt(), (first * rowH).roundToInt()),
+        dstOffset = IntOffset(x0.roundToInt(), top.roundToInt()), dstSize = IntSize((x1 - x0).roundToInt().coerceAtLeast(1), (first * rowH).roundToInt()),
     )
     val rest = w.filled - first
     if (rest > 0) {
         drawImage(
             img, srcOffset = IntOffset(0, 0), srcSize = IntSize(w.width, rest),
-            dstOffset = IntOffset(0, (top + first * rowH).roundToInt()),
-            dstSize = IntSize(size.width.roundToInt(), (rest * rowH).roundToInt()),
+            dstOffset = IntOffset(x0.roundToInt(), (top + first * rowH).roundToInt()),
+            dstSize = IntSize((x1 - x0).roundToInt().coerceAtLeast(1), (rest * rowH).roundToInt()),
         )
     }
 }
 
-private fun DrawScope.drawTrace(w: Waterfall, h: Float) {
-    drawRect(Color(0xFF0A0F1A), size = Size(size.width, h))
+private fun DrawScope.drawTrace(w: Waterfall, h: Float, x0: Float, x1: Float) {
     val n = w.trace.size
     if (n < 2 || w.floorDb.isNaN()) return
     val lo = w.floorDb - 5f
@@ -162,7 +180,7 @@ private fun DrawScope.drawTrace(w: Waterfall, h: Float) {
     for (k in 0 until n) {
         val d = w.trace[k]
         if (d.isNaN()) continue
-        val x = (k + 0.5f) / n * size.width
+        val x = x0 + (k + 0.5f) / n * (x1 - x0)
         val y = h - ((d - lo) / range).coerceIn(0f, 1f) * h
         if (!started) path.moveTo(x, y) else path.lineTo(x, y)
         started = true
@@ -170,7 +188,7 @@ private fun DrawScope.drawTrace(w: Waterfall, h: Float) {
     drawPath(path, Color(0xFF80D8FF), style = Stroke(width = 1.5f))
 }
 
-private fun DrawScope.drawMarkers(w: Waterfall, dialHz: Long, low: Int, high: Int) {
+private fun DrawScope.drawMarkers(w: BandAxis, dialHz: Long, low: Int, high: Int) {
     if (w.spanHz == 0) return
     val x0 = w.fractionOf(dialHz + low) * size.width
     val x1 = w.fractionOf(dialHz + high) * size.width
