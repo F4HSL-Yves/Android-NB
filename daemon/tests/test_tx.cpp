@@ -197,7 +197,15 @@ void test_jitter() {
     CHECK(j.pop(p) == nb::PacketJitter::Pop::Packet && p == "e", "e");
     j.push(13, "late");  // after its turn: ignored
     CHECK(j.size() == 0, "late packet dropped");
-    CHECK(j.pop(p) == nb::PacketJitter::Pop::Empty && j.underruns() == 1, "underrun counted");
+    CHECK(j.pop(p) == nb::PacketJitter::Pop::Stretch && j.underruns() == 1, "dry: stretch, underrun counted");
+    CHECK(j.pop(p) == nb::PacketJitter::Pop::Stretch && j.underruns() == 1, "one underrun per dry spell");
+    j.push(15, "f");  // late but not lost: plays after the stretch
+    CHECK(j.pop(p) == nb::PacketJitter::Pop::Packet && p == "f", "f after stretch");
+    nb::PacketJitter k(1, 6, 3);
+    k.push(1, "x");
+    CHECK(k.pop(p) == nb::PacketJitter::Pop::Packet, "x");
+    for (int i = 0; i < 3; ++i) CHECK(k.pop(p) == nb::PacketJitter::Pop::Stretch, "stretch %d", i);
+    CHECK(k.pop(p) == nb::PacketJitter::Pop::Empty, "gives up after max_stretch");
     j.reset();
     for (uint16_t s = 65533; s != 6; ++s) j.push(s, "w");  // wraps, overflows
     CHECK(j.size() == 6 && j.dropped() > 0, "bounded: size %zu dropped %llu", j.size(),

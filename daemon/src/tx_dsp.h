@@ -82,10 +82,16 @@ private:
 // number. pop() gives them back in sequence order once `prefill` packets
 // are queued, reports a missing packet (for loss concealment) and drops the
 // oldest when the backlog grows past `max_queue`.
+// When the queue runs dry while playing (a late packet over Wi-Fi, or the
+// phone's clock a little slower than the DAC's), pop() answers Stretch: the
+// caller conceals 20 ms without skipping the expected packet, which still
+// plays when it comes. After `max_stretch` of those in a row it really stops
+// and waits for `prefill` packets again.
 class PacketJitter {
 public:
-    enum class Pop { Packet, Missing, Empty };
-    explicit PacketJitter(size_t prefill = 4, size_t max_queue = 15) : prefill_(prefill), max_(max_queue) {}
+    enum class Pop { Packet, Missing, Stretch, Empty };
+    explicit PacketJitter(size_t prefill = 4, size_t max_queue = 15, size_t max_stretch = 10)
+        : prefill_(prefill), max_(max_queue), max_stretch_(max_stretch) {}
     void push(uint16_t seq, std::string packet);
     Pop pop(std::string& packet);
     void reset();
@@ -95,7 +101,8 @@ public:
 
 private:
     mutable std::mutex mu_;
-    size_t prefill_, max_;
+    size_t prefill_, max_, max_stretch_;
+    size_t stretch_run_ = 0;
     std::deque<std::pair<uint16_t, std::string>> q_;
     bool started_ = false;
     bool have_next_ = false;

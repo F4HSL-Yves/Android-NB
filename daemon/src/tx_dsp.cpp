@@ -201,10 +201,13 @@ PacketJitter::Pop PacketJitter::pop(std::string& packet) {
         have_next_ = true;
     }
     if (q_.empty()) {
+        if (stretch_run_ == 0) ++underruns_;
+        if (++stretch_run_ <= max_stretch_) return Pop::Stretch;
+        stretch_run_ = 0;
         started_ = false;
-        ++underruns_;
         return Pop::Empty;
     }
+    stretch_run_ = 0;
     if (q_.front().first == next_) {
         packet = std::move(q_.front().second);
         q_.pop_front();
@@ -219,6 +222,7 @@ void PacketJitter::reset() {
     std::lock_guard<std::mutex> lk(mu_);
     q_.clear();
     started_ = false;
+    stretch_run_ = 0;
     have_next_ = false;
 }
 

@@ -40,7 +40,7 @@ std::string tx_status_json(const TxStatus& s) {
 }
 
 Transmitter::Transmitter(TransmitterConfig cfg, SinkFactory make_sink)
-    : cfg_(cfg), make_sink_(std::move(make_sink)), jitter_(4, 15) {
+    : cfg_(cfg), make_sink_(std::move(make_sink)), jitter_(6, 20) {
     thread_ = std::thread([this] { run(); });
 }
 
