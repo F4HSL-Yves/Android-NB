@@ -463,6 +463,10 @@ int main(int argc, char** argv) {
                 if (!tx) error = "this nbd has no transmitter (--tx)";
                 else tx->set_mic_gain_db(c.a);
                 break;
+            case nb::Command::Comp:
+                if (!tx) error = "this nbd has no transmitter (--tx)";
+                else tx->set_compressor(c.a != 0.0, c.b);
+                break;
             case nb::Command::None:
                 break;
             }

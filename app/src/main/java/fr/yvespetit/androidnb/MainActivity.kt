@@ -389,11 +389,13 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
     // Follow the board's gain until the user moves the slider.
     LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
     // nbd forgets the correction when it restarts: send it on each connection.
+    var comp by rememberSaveable { mutableStateOf(prefs.getBoolean("comp", false)) }
     var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain", 10).toFloat()) }
     LaunchedEffect(connected) {
         if (connected) {
             c.setTxCal(prefs.getInt("tx_cal", 0))
             c.setMicGain(prefs.getInt("mic_gain", 10))
+            c.setCompressor(prefs.getBoolean("comp", false))
         }
     }
 
@@ -480,6 +482,11 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
                 tune = !tune
                 c.setTune(tune)
             }, label = { Text("Porteuse 1 kHz") })
+            FilterChip(selected = comp, onClick = {
+                comp = !comp
+                prefs.edit().putBoolean("comp", comp).apply()
+                c.setCompressor(comp)
+            }, label = { Text("Compresseur") })
             Text("Arduino", style = MaterialTheme.typography.bodySmall)
             Switch(checked = arduino, enabled = !active, onCheckedChange = {
                 arduino = it

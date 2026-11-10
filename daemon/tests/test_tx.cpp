@@ -218,6 +218,10 @@ void test_protocol() {
     CHECK(c.type == nb::Command::None && !err.empty(), "txcal range");
     c = nb::parse_command("{\"cmd\":\"micgain\",\"db\":6}", err);
     CHECK(c.type == nb::Command::MicGain && c.a == 6.0, "micgain");
+    c = nb::parse_command("{\"cmd\":\"comp\",\"on\":1,\"db\":12}", err);
+    CHECK(c.type == nb::Command::Comp && c.a == 1.0 && c.b == 12.0, "comp");
+    c = nb::parse_command("{\"cmd\":\"comp\",\"on\":1,\"db\":40}", err);
+    CHECK(c.type == nb::Command::None && !err.empty(), "comp out of range");
     uint16_t seq = 0;
     std::string opus;
     const std::string m = std::string("\x03\x01\x02", 3) + "OPUS";

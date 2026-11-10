@@ -179,6 +179,8 @@ object NbProtocol {
     fun txCalCommand(hz: Int) = """{"cmd":"txcal","hz":$hz}"""
     fun micGainCommand(db: Int) = """{"cmd":"micgain","db":$db}"""
 
+    fun compCommand(on: Boolean, db: Int = 10) = """{"cmd":"comp","on":${if (on) 1 else 0},"db":$db}"""
+
     fun freqCommand(hz: Long) = """{"cmd":"freq","hz":$hz}"""
     fun filterCommand(lowHz: Int, highHz: Int) = """{"cmd":"filter","low":$lowHz,"high":$highHz}"""
     fun agcCommand(mode: Int) = """{"cmd":"agc","mode":$mode}"""

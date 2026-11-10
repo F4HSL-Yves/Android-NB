@@ -313,6 +313,7 @@ class NbConnection {
     fun setTune(on: Boolean, hz: Int = 1000) = send(NbProtocol.tuneCommand(on, hz))
     fun setTxCal(hz: Int) = send(NbProtocol.txCalCommand(hz))
     fun setMicGain(db: Int) = send(NbProtocol.micGainCommand(db))
+    fun setCompressor(on: Boolean) = send(NbProtocol.compCommand(on))
 
     fun setPrefillPackets(n: Int) {
         jitter.prefill = n

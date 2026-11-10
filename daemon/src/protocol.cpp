@@ -69,6 +69,12 @@ Command parse_command(const std::string& json, std::string& error) {
             if (c.a < -20 || c.a > 30) error = "micgain: db -20..30";
             else c.type = Command::MicGain;
         }
+    } else if (cmd == "comp") {
+        if (num("on", c.a)) {
+            if (!json_number(json, "db", c.b)) c.b = 10.0;
+            if (c.b < 0 || c.b > 20) error = "comp: db 0..20";
+            else c.type = Command::Comp;
+        }
     } else {
         error = "unknown cmd " + cmd;
     }
