@@ -159,13 +159,15 @@ class NbConnection {
                     m.publish("cmd/nb/mode", "nb")
                     askNb = false
                 }
-                m.setReadTimeout(MqttLite.KEEPALIVE_S * 1000 / 2)
+                // The board publishes every second (Arduino, Tezuka), so the
+                // link is never idle: ping on our own send clock, or mosquitto
+                // drops us after 1.5 keepalives without a packet from us. A
+                // link silent for a whole keepalive (no PINGRESP) is dead.
+                m.setReadTimeout(1000)
                 while (wanted) {
-                    val msg = m.receive()
-                    if (msg == null) {
-                        m.ping()
-                        continue
-                    }
+                    if (m.sendIdleMs() >= MqttLite.KEEPALIVE_S * 1000L / 3) m.ping()
+                    if (m.receiveIdleMs() > MqttLite.KEEPALIVE_S * 1000L) throw java.io.IOException("MQTT: plus de réponse")
+                    val msg = m.receive() ?: continue
                     onMqtt(msg.topic, msg.payload.trim())
                 }
             } catch (_: Exception) {

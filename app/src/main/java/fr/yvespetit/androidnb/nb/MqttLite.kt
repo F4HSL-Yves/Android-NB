@@ -19,11 +19,20 @@ class MqttLite private constructor(private val socket: Socket) {
     private val output: OutputStream = socket.getOutputStream()
     private val sendLock = Any()
     private var packetId = 1
+    @Volatile private var lastSendMs = System.currentTimeMillis()
+    @Volatile private var lastRxMs = System.currentTimeMillis()
+
+    /** Milliseconds since this client last sent anything (keepalive). */
+    fun sendIdleMs() = System.currentTimeMillis() - lastSendMs
+
+    /** Milliseconds since anything came from the broker (dead link check). */
+    fun receiveIdleMs() = System.currentTimeMillis() - lastRxMs
 
     class Message(val topic: String, val payload: String)
 
     companion object {
         const val KEEPALIVE_S = 30
+        private const val PACKET_DEADLINE_MS = 10_000L
 
         fun connect(host: String, port: Int = 1883, clientId: String, timeoutMs: Int = 5000): MqttLite {
             val socket = Socket()
@@ -107,23 +116,55 @@ class MqttLite private constructor(private val socket: Socket) {
         synchronized(sendLock) {
             output.write(packet)
             output.flush()
+            lastSendMs = System.currentTimeMillis()
         }
     }
 
+    /**
+     * One packet. A read timeout before its first byte means "idle" and is
+     * passed on; once a packet has started, timeouts are waited through (up
+     * to [PACKET_DEADLINE_MS]) so that a slow packet is never cut in half,
+     * which would leave the stream out of step for good.
+     */
     private fun readPacket(): Pair<Int, ByteArray>? {
         val first = input.read()
         if (first < 0) return null
+        val deadline = System.currentTimeMillis() + PACKET_DEADLINE_MS
         var len = 0
         var mult = 1
         while (true) {
-            val b = input.readUnsignedByte()
+            val b = readByteWaiting(deadline)
             len += (b and 0x7F) * mult
             if (b and 0x80 == 0) break
             mult *= 128
             if (mult > 128 * 128 * 128) throw IOException("MQTT: longueur invalide")
         }
         val data = ByteArray(len)
-        input.readFully(data)
+        var off = 0
+        while (off < len) {
+            val n = try {
+                input.read(data, off, len - off)
+            } catch (e: SocketTimeoutException) {
+                if (System.currentTimeMillis() > deadline) throw IOException("MQTT: paquet incomplet", e)
+                continue
+            }
+            if (n < 0) throw IOException("MQTT: connexion fermée")
+            off += n
+        }
+        lastRxMs = System.currentTimeMillis()
         return first to data
+    }
+
+    private fun readByteWaiting(deadline: Long): Int {
+        while (true) {
+            val b = try {
+                input.read()
+            } catch (e: SocketTimeoutException) {
+                if (System.currentTimeMillis() > deadline) throw IOException("MQTT: paquet incomplet", e)
+                continue
+            }
+            if (b < 0) throw IOException("MQTT: connexion fermée")
+            return b
+        }
     }
 }

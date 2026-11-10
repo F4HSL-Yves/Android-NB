@@ -80,4 +80,42 @@ class MqttLiteTest {
         broker.join(2000)
         server.close()
     }
+
+    /** A PUBLISH that arrives in two halves, 1.5 s apart, with a 1 s read timeout. */
+    @Test
+    fun splitPacketSurvivesReadTimeouts() {
+        ServerSocket(0).use { server ->
+            val broker = thread {
+                server.accept().use { s ->
+                    val inp = s.getInputStream()
+                    val out = s.getOutputStream()
+                    // CONNECT: fixed header + remaining length (< 128 here) + body.
+                    inp.read()
+                    val len = inp.read()
+                    inp.readNBytes(len)
+                    out.write(byteArrayOf(0x20, 2, 0, 0))
+                    out.flush()
+                    val topic = "arduino/status/ptt".toByteArray()
+                    val payload = "off".toByteArray()
+                    val body = byteArrayOf(0, topic.size.toByte()) + topic + payload
+                    val packet = byteArrayOf(0x30, body.size.toByte()) + body
+                    Thread.sleep(1500)  // first receive() times out: idle
+                    out.write(packet, 0, 5)
+                    out.flush()
+                    Thread.sleep(1500)  // timeout in the middle of the packet
+                    out.write(packet, 5, packet.size - 5)
+                    out.flush()
+                    Thread.sleep(500)
+                }
+            }
+            val m = MqttLite.connect("127.0.0.1", server.localPort, "test")
+            m.setReadTimeout(1000)
+            assertNull(m.receive())
+            val msg = m.receive() ?: m.receive()
+            assertEquals("arduino/status/ptt", msg?.topic)
+            assertEquals("off", msg?.payload)
+            m.close()
+            broker.join()
+        }
+    }
 }
