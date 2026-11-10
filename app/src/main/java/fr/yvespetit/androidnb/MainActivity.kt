@@ -389,7 +389,13 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
     // Follow the board's gain until the user moves the slider.
     LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
     // nbd forgets the correction when it restarts: send it on each connection.
-    LaunchedEffect(connected) { if (connected) c.setTxCal(prefs.getInt("tx_cal", 0)) }
+    var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain", 10).toFloat()) }
+    LaunchedEffect(connected) {
+        if (connected) {
+            c.setTxCal(prefs.getInt("tx_cal", 0))
+            c.setMicGain(prefs.getInt("mic_gain", 10))
+        }
+    }
 
     val uplink = Qo100.uplinkFor(dial)
     val allowed = Qo100.isTransmitAllowed(uplink)
@@ -456,6 +462,19 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
                 enabled = c.mqttUp && c.callsign != null,
             )
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(String.format(Locale.FRANCE, "Micro %+.0f dB", micGain), modifier = Modifier.width(96.dp),
+                style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = micGain, valueRange = -10f..30f, steps = 39,
+                onValueChange = { micGain = Math.round(it).toFloat() },
+                onValueChangeFinished = {
+                    prefs.edit().putInt("mic_gain", micGain.toInt()).apply()
+                    c.setMicGain(micGain.toInt())
+                },
+                enabled = connected,
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = tune, onClick = {
                 tune = !tune
@@ -492,7 +511,7 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
         if (tx != null && tx.state == "on") {
             Text(
                 String.format(
-                    Locale.FRANCE, "Micro %.0f dB • ALC %.1f dB • sortie %.1f dB • %.0f s",
+                    Locale.FRANCE, "Niveau micro %.0f dB • ALC %.1f dB • sortie %.1f dB • %.0f s",
                     tx.micDb, tx.alcDb, tx.outDb, tx.onS,
                 ) + if (tx.underruns > 0) " • trous ${tx.underruns}" else "",
                 style = MaterialTheme.typography.bodySmall,
