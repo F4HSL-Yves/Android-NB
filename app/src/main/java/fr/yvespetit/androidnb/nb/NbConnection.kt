@@ -343,6 +343,7 @@ class NbConnection {
     fun tune(hz: Long) = send(NbProtocol.freqCommand(hz))
     fun setFilter(lowHz: Int, highHz: Int) = send(NbProtocol.filterCommand(lowHz, highHz))
     fun setAgc(mode: Int) = send(NbProtocol.agcCommand(mode))
+    fun setNr(mode: Int) = send(NbProtocol.nrCommand(mode))
     fun setBitrate(bps: Int) = send(NbProtocol.bitrateCommand(bps))
     fun setSpectrum(centerHz: Long, spanHz: Int, bins: Int, rate: Double) =
         send(NbProtocol.spectrumCommand(centerHz, spanHz, bins, rate))

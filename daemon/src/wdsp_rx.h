@@ -25,6 +25,8 @@ public:
     void set_usb(double low_hz, double high_hz);
     // 0 off, 1 long, 2 slow, 3 medium (default), 4 fast.
     void set_agc(int mode);
+    // Noise reduction: 0 off, 1 ANR (LMS), 2 EMNR (spectral, Thetis NR2).
+    void set_nr(int mode);
 
     // in: exactly in_size() samples. Appends 48 kHz mono audio to `audio`.
     void process(const cf* in, std::vector<float>& audio);

@@ -69,6 +69,11 @@ Command parse_command(const std::string& json, std::string& error) {
             if (c.a < -20 || c.a > 30) error = "micgain: db -20..30";
             else c.type = Command::MicGain;
         }
+    } else if (cmd == "nr") {
+        if (num("mode", c.a)) {
+            if (c.a < 0 || c.a > 2) error = "nr: mode 0..2";
+            else c.type = Command::Nr;
+        }
     } else if (cmd == "txcal_auto") {
         c.type = Command::TxCalAuto;
     } else if (cmd == "comp") {
@@ -87,10 +92,10 @@ std::string status_json(const StatusInfo& s) {
     char buf[512];
     std::snprintf(buf, sizeof buf,
                   "{\"type\":\"status\",\"freq\":%.0f,\"beacon\":\"%s\",\"correction\":%.1f,\"drift\":%.3f,"
-                  "\"snr\":%.1f,\"s\":%.1f,\"filter\":[%.0f,%.0f],\"agc\":%d,\"bitrate\":%d,\"clients\":%d,"
+                  "\"snr\":%.1f,\"s\":%.1f,\"filter\":[%.0f,%.0f],\"agc\":%d,\"nr\":%d,\"bitrate\":%d,\"clients\":%d,"
                   "\"dropped\":%llu,\"uptime\":%.0f}",
                   s.freq_hz, s.beacon, s.correction_hz, s.drift_hz_per_s, s.snr_db, s.signal_db, s.filter_low,
-                  s.filter_high, s.agc, s.bitrate, s.clients, static_cast<unsigned long long>(s.dropped), s.uptime_s);
+                  s.filter_high, s.agc, s.nr, s.bitrate, s.clients, static_cast<unsigned long long>(s.dropped), s.uptime_s);
     return buf;
 }
 

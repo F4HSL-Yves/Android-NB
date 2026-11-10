@@ -17,6 +17,13 @@ void SetRXAAGCMode(int channel, int mode);
 void SetRXAShiftRun(int channel, int run);
 void SetRXAShiftFreq(int channel, double fshift);
 void SetRXAPanelGain1(int channel, double gain);
+void SetRXAANRRun(int channel, int run);
+void SetRXAANRPosition(int channel, int position);
+void SetRXAEMNRRun(int channel, int run);
+void SetRXAEMNRgainMethod(int channel, int method);
+void SetRXAEMNRnpeMethod(int channel, int method);
+void SetRXAEMNRaeRun(int channel, int run);
+void SetRXAEMNRPosition(int channel, int position);
 double GetRXAMeter(int channel, int mt);
 void WDSPwisdom(char* directory);
 }
@@ -60,6 +67,18 @@ void WdspRx::set_offset_hz(double hz) {
 }
 
 void WdspRx::set_agc(int mode) { SetRXAAGCMode(channel_, mode); }
+
+void WdspRx::set_nr(int mode) {
+    // Thetis defaults: EMNR gain method 2 (gamma), noise estimate 0 (OSMS),
+    // artifact elimination on; both after the AGC (position 1).
+    SetRXAEMNRgainMethod(channel_, 2);
+    SetRXAEMNRnpeMethod(channel_, 0);
+    SetRXAEMNRaeRun(channel_, 1);
+    SetRXAEMNRPosition(channel_, 1);
+    SetRXAANRPosition(channel_, 1);
+    SetRXAANRRun(channel_, mode == 1 ? 1 : 0);
+    SetRXAEMNRRun(channel_, mode == 2 ? 1 : 0);
+}
 
 void WdspRx::set_usb(double low_hz, double high_hz) {
     SetRXAMode(channel_, kModeUsb);

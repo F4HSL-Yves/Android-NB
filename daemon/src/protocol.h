@@ -14,6 +14,7 @@
 //   {"cmd":"freq","hz":10489900000}         USB dial frequency (downlink)
 //   {"cmd":"filter","low":200,"high":2800}  audio passband, Hz
 //   {"cmd":"agc","mode":3}                  0 off, 1 long, 2 slow, 3 medium, 4 fast
+//   {"cmd":"nr","mode":2}                   noise reduction: 0 off, 1 ANR, 2 EMNR
 //   {"cmd":"bitrate","bps":16000}           Opus bitrate, shared by all clients
 //   {"cmd":"spectrum","center":10489750000,"span":768000,"bins":768,"rate":8}
 //                                           waterfall view, shared; rate 0 = off
@@ -48,7 +49,7 @@ constexpr uint8_t kSpectrumLine = 0x02;
 constexpr uint8_t kMicOpus = 0x03;
 
 struct Command {
-    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp, TxCalAuto } type = None;
+    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp, TxCalAuto, Nr } type = None;
     double a = 0.0, b = 0.0, c = 0.0, d = 0.0;
 };
 
@@ -64,6 +65,7 @@ struct StatusInfo {
     double correction_hz = 0, drift_hz_per_s = 0, snr_db = 0, signal_db = 0;
     double filter_low = 0, filter_high = 0;
     int agc = 0, bitrate = 0, clients = 0;
+    int nr = 0;
     uint64_t dropped = 0;
     double uptime_s = 0;
 };

@@ -51,6 +51,7 @@ object NbProtocol {
         val filterLowHz: Int,
         val filterHighHz: Int,
         val agc: Int,
+        val nr: Int = 0,
         val bitrate: Int,
         val clients: Int,
         val dropped: Long,
@@ -137,6 +138,7 @@ object NbProtocol {
                     filterLowHz = filter.getOrNull(0)?.toInt() ?: 0,
                     filterHighHz = filter.getOrNull(1)?.toInt() ?: 0,
                     agc = number(text, "agc")?.toInt() ?: 0,
+                    nr = number(text, "nr")?.toInt() ?: 0,
                     bitrate = number(text, "bitrate")?.toInt() ?: 0,
                     clients = number(text, "clients")?.toInt() ?: 0,
                     dropped = number(text, "dropped")?.toLong() ?: 0L,
@@ -193,6 +195,8 @@ object NbProtocol {
     fun freqCommand(hz: Long) = """{"cmd":"freq","hz":$hz}"""
     fun filterCommand(lowHz: Int, highHz: Int) = """{"cmd":"filter","low":$lowHz,"high":$highHz}"""
     fun agcCommand(mode: Int) = """{"cmd":"agc","mode":$mode}"""
+
+    fun nrCommand(mode: Int) = """{"cmd":"nr","mode":$mode}"""
     fun bitrateCommand(bps: Int) = """{"cmd":"bitrate","bps":$bps}"""
     /** Waterfall view shared by all clients; rate 0 stops it. centerHz 0 = band centre. */
     fun spectrumCommand(centerHz: Long, spanHz: Int, bins: Int, rate: Double) =

@@ -104,6 +104,7 @@ private val filters = listOf(
     FilterPreset("3,2 k", 100, 3300),
 )
 private val agcModes = listOf("Off" to 0, "Lent" to 2, "Moyen" to 3, "Rapide" to 4)
+private val nrModes = listOf("Off" to 0, "NR1" to 1, "NR2" to 2)
 private val bitrates = listOf(8000, 12000, 16000, 24000)
 private val buffers = listOf(4, 6, 10, 15)  // packets of 20 ms
 private val steps = listOf(10L, 100L, 1000L, 10000L)
@@ -155,6 +156,7 @@ private fun MainScreen(c: NbConnection) {
     val status = c.status
     val hello = c.hello
     val connected = c.link == NbConnection.Link.CONNECTED
+    LaunchedEffect(connected) { if (connected) c.setNr(prefs.getInt("nr", 0)) }
     val minHz = hello?.minFreqHz ?: Qo100.DOWNLINK_LOW_HZ
     val maxHz = hello?.maxFreqHz ?: Qo100.DOWNLINK_HIGH_HZ
 
@@ -281,6 +283,10 @@ private fun MainScreen(c: NbConnection) {
             c.setFilter(it.low, it.high)
         }
         ChipRow("AGC", agcModes, agcModes.firstOrNull { it.second == status?.agc }, { it.first }) { c.setAgc(it.second) }
+        ChipRow("Bruit", nrModes, nrModes.firstOrNull { it.second == status?.nr }, { it.first }) {
+            prefs.edit().putInt("nr", it.second).apply()
+            c.setNr(it.second)
+        }
         ChipRow("Débit", bitrates, status?.bitrate, { "${it / 1000}k" }) { c.setBitrate(it) }
         ChipRow("Tampon", buffers, bufferPackets, { "${it * 20} ms" }) {
             bufferPackets = it

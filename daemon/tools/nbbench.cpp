@@ -131,6 +131,16 @@ int main(int argc, char** argv) {
         report(name, since(t), secs);
         std::printf("  channel opened in %.2f s, S %.1f dB\n", open_wall, rx.signal_db());
     }
+    for (int nr = 1; nr <= 2; ++nr) {
+        nb::WdspRx rx(0, 48000, kBlock / 16, dsp_size);
+        rx.set_nr(nr);
+        const auto t = clk::now();
+        for (size_t b = 0; b < blocks; ++b) {
+            audio.clear();
+            rx.process(narrow[b].data(), audio);
+        }
+        report(nr == 1 ? "WDSP USB at 48k + ANR" : "WDSP USB at 48k + EMNR", since(t), secs);
+    }
     if (legacy) {
         nb::WdspRx rx(1, static_cast<int>(kRate), kBlock, 4096);
         rx.set_offset_hz(station - 1000.0);

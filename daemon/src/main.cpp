@@ -331,6 +331,7 @@ int main(int argc, char** argv) {
     double station_offset = o.freq_hz - o.center_hz;
     double filter_low = 200.0, filter_high = 2800.0;
     int agc = 3;
+    int nr = 0;
     // Keep the station and its passband inside the IQ bandwidth.
     const double min_freq = o.center_hz - o.rate / 2 + 3000.0;
     const double max_freq = o.center_hz + o.rate / 2 - 6000.0;
@@ -432,6 +433,10 @@ int main(int argc, char** argv) {
                 filter_low = c.a;
                 filter_high = c.b;
                 rx.set_usb(filter_low, filter_high);
+                break;
+            case nb::Command::Nr:
+                nr = static_cast<int>(c.a);
+                rx.set_nr(nr);
                 break;
             case nb::Command::Agc:
                 agc = static_cast<int>(c.a);
@@ -605,6 +610,7 @@ int main(int argc, char** argv) {
                 si.filter_low = filter_low;
                 si.filter_high = filter_high;
                 si.agc = agc;
+                si.nr = nr;
                 si.bitrate = opus->bitrate();
                 si.clients = ws->clients();
                 si.dropped = ws->dropped_audio_frames();
