@@ -46,7 +46,8 @@ struct TxStatus {
     double mic_db = -200, alc_db = 0, out_db = -200;
     uint64_t underruns = 0, dropped = 0;
     double on_s = 0;
-    double dac_sps = 0;  // IQ samples actually written per second (should be the DAC rate)
+    double dac_sps = 0;
+    std::string sink;    // dma, iiod or file  // IQ samples actually written per second (should be the DAC rate)
 };
 std::string tx_status_json(const TxStatus& s);
 

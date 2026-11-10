@@ -9,8 +9,10 @@
 //
 // On the board itself (iiod host 127.0.0.1) the samples bypass iiod: its
 // WRITEBUF path proved far too slow for 12 MB/s (about 1/8 of real time on
-// the FishBall), so PlutoTx writes to /dev/iio:deviceN directly, with the
-// buffer set up through sysfs. iiod still does the attributes and the mute.
+// the FishBall), so PlutoTx feeds /dev/iio:deviceN directly through the
+// ADI block interface (mmap'ed DMA blocks, as libiio's local backend does;
+// plain write() spins in this kernel). iiod still does the attributes and
+// the mute. Without the block interface it falls back to iiod.
 //
 // pluto_stream must leave the DMA free: its tx/stream/mode has to be "pass"
 // (the app sets it over MQTT before the first transmission).
@@ -21,6 +23,7 @@
 #include <chrono>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "iiod_client.h"
 
@@ -38,6 +41,8 @@ public:
     virtual void close() = 0;
     // Cuts the RF now (TX LO power down). Must not throw.
     virtual void mute() noexcept = 0;
+    // How the samples go out ("dma", "iiod", "file"), for the status.
+    virtual const char* kind() const { return ""; }
 };
 
 struct PlutoTxConfig {
@@ -61,6 +66,7 @@ public:
     void write(const int16_t* iq, size_t samples) override;
     void close() override;
     void mute() noexcept override;
+    const char* kind() const override { return fd_ >= 0 ? "dma" : "iiod"; }
 
 private:
     PlutoTxConfig cfg_;
@@ -71,8 +77,16 @@ private:
     // Local DMA path: sysfs directory of the dds core and its /dev node.
     std::string sysfs_;
     int fd_ = -1;
-    void open_local();
+    std::vector<void*> maps_;
+    std::vector<uint32_t> block_size_;
+    // Blocks never handed to the DMA yet (filled first, without a dequeue).
+    std::vector<uint32_t> fresh_;
+    uint32_t cur_ = 0;        // block being filled
+    size_t cur_used_ = 0;     // bytes already in it
+    bool have_cur_ = false;
+    bool open_local();        // false: no block interface, use iiod
     void close_local() noexcept;
+    void next_block();
 };
 
 // "/sys/bus/iio/devices/iio:deviceN" of the device called name, or "".
@@ -91,6 +105,7 @@ public:
     void write(const int16_t* iq, size_t samples) override;
     void close() override;
     void mute() noexcept override { muted_ = true; }
+    const char* kind() const override { return "file"; }
     bool muted() const { return muted_; }
 
 private:

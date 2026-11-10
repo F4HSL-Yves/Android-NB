@@ -10,6 +10,9 @@
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 namespace nb {
@@ -97,8 +100,8 @@ void PlutoTx::open() {
 
     if (cfg_.local_dma && is_loopback(cfg_.host)) {
         sysfs_ = find_local_iio_device("cf-ad9361-dds-core-lpc");
-        if (!sysfs_.empty() && ::access(("/dev/" + sysfs_.substr(sysfs_.rfind('/') + 1)).c_str(), W_OK) == 0) {
-            open_local();
+        if (!sysfs_.empty() && ::access(("/dev/" + sysfs_.substr(sysfs_.rfind('/') + 1)).c_str(), W_OK) == 0 &&
+            open_local()) {
             open_ = true;
             return;
         }
@@ -119,52 +122,133 @@ void PlutoTx::open() {
     open_ = true;
 }
 
-void PlutoTx::open_local() {
+namespace {
+// ADI's IIO DMA block interface (include/uapi/linux/iio/buffer.h in the ADI
+// kernel; libiio local.c uses the same definitions).
+struct IioBlockAllocReq {
+    uint32_t type, size, count, id;
+};
+struct IioBlock {
+    uint32_t id, size, bytes_used, type, flags, offset;
+    uint64_t timestamp;
+};
+constexpr unsigned long kBlockAlloc = _IOWR('i', 0xa0, IioBlockAllocReq);
+constexpr unsigned long kBlockFree = _IO('i', 0xa1);
+constexpr unsigned long kBlockQuery = _IOWR('i', 0xa2, IioBlock);
+constexpr unsigned long kBlockEnqueue = _IOWR('i', 0xa3, IioBlock);
+constexpr unsigned long kBlockDequeue = _IOWR('i', 0xa4, IioBlock);
+constexpr int kDacTimeoutMs = 1000;
+
+int ioctl_retry(int fd, unsigned long req, void* arg) {
+    int r;
+    do r = ::ioctl(fd, req, arg);
+    while (r < 0 && errno == EINTR);
+    return r;
+}
+
+IiodError busy_or(const IiodError& e) {
+    if (e.code() == -EBUSY) return IiodError("TX DMA busy: pluto_stream holds it (tx/stream/mode must be pass)", e.code());
+    return e;
+}
+}  // namespace
+
+bool PlutoTx::open_local() {
     const std::string dev = "/dev/" + sysfs_.substr(sysfs_.rfind('/') + 1);
     // A buffer left enabled (by a crashed nbd) would refuse the settings.
     try {
         if (read_file(sysfs_ + "/buffer/enable") == "1") write_sysfs(sysfs_ + "/buffer/enable", "0");
     } catch (const IiodError& e) {
-        if (e.code() == -EBUSY)
-            throw IiodError("TX DMA busy: pluto_stream holds it (tx/stream/mode must be pass)", e.code());
-        throw;
+        throw busy_or(e);
     }
     // I and Q of TX1 only.
     if (DIR* d = ::opendir((sysfs_ + "/scan_elements").c_str())) {
-        while (const dirent* e = ::readdir(d)) {
-            const std::string n = e->d_name;
-            if (n.size() > 3 && n.compare(n.size() - 3, 3, "_en") == 0 && n.compare(0, 11, "out_voltage") == 0)
-                write_sysfs(sysfs_ + "/scan_elements/" + n,
-                            n == "out_voltage0_en" || n == "out_voltage1_en" ? "1" : "0");
-        }
+        std::vector<std::string> names;
+        while (const dirent* e = ::readdir(d)) names.emplace_back(e->d_name);
         ::closedir(d);
+        for (const auto& n : names)
+            if (n.size() > 3 && n.compare(n.size() - 3, 3, "_en") == 0 && n.compare(0, 11, "out_voltage") == 0)
+                write_sysfs(sysfs_ + "/scan_elements/" + n, n == "out_voltage0_en" || n == "out_voltage1_en" ? "1" : "0");
     }
-    // The DMA buffer's fileio mode splits the length into two blocks: two
-    // blocks of kernel_buffers/2 nbd writes each, ~43 ms of slack.
-    const size_t length = cfg_.buffer_samples * static_cast<size_t>(std::max(2, cfg_.kernel_buffers));
-    write_sysfs(sysfs_ + "/buffer/length", std::to_string(length));
-    fd_ = ::open(dev.c_str(), O_WRONLY | O_CLOEXEC);
+    fd_ = ::open(dev.c_str(), O_RDWR | O_CLOEXEC | O_NONBLOCK);
     if (fd_ < 0) throw IiodError("cannot open " + dev + ": " + std::strerror(errno), -errno);
-    try {
-        write_sysfs(sysfs_ + "/buffer/enable", "1");
-    } catch (const IiodError& e) {
+
+    const unsigned count = static_cast<unsigned>(std::max(2, cfg_.kernel_buffers));
+    IioBlockAllocReq req{0, static_cast<uint32_t>(cfg_.buffer_samples * 4), count, 0};
+    if (ioctl_retry(fd_, kBlockAlloc, &req) < 0) {
+        const int err = errno;
         ::close(fd_);
         fd_ = -1;
-        if (e.code() == -EBUSY)
-            throw IiodError("TX DMA busy: pluto_stream holds it (tx/stream/mode must be pass)", e.code());
-        throw;
+        if (err == EBUSY) throw busy_or(IiodError("block alloc", -EBUSY));
+        return false;  // no block interface in this kernel
     }
+    try {
+        if (req.count < 2) throw IiodError("TX DMA: the kernel gave " + std::to_string(req.count) + " block(s)");
+        for (uint32_t i = 0; i < req.count; ++i) {
+            IioBlock b{};
+            b.id = i;
+            if (ioctl_retry(fd_, kBlockQuery, &b) < 0)
+                throw IiodError(std::string("TX DMA block query: ") + std::strerror(errno), -errno);
+            void* m = ::mmap(nullptr, b.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, b.offset);
+            if (m == MAP_FAILED) throw IiodError(std::string("TX DMA mmap: ") + std::strerror(errno), -errno);
+            std::memset(m, 0, b.size);
+            maps_.push_back(m);
+            block_size_.push_back(b.size);
+            fresh_.push_back(i);
+        }
+        write_sysfs(sysfs_ + "/buffer/enable", "1");
+    } catch (const IiodError& e) {
+        close_local();
+        throw busy_or(e);
+    }
+    have_cur_ = false;
+    return true;
 }
 
 void PlutoTx::close_local() noexcept {
-    if (fd_ >= 0) {
-        try {
-            write_sysfs(sysfs_ + "/buffer/enable", "0");
-        } catch (...) {
-        }
-        ::close(fd_);
-        fd_ = -1;
+    if (fd_ < 0) return;
+    try {
+        write_sysfs(sysfs_ + "/buffer/enable", "0");
+    } catch (...) {
     }
+    for (size_t i = 0; i < maps_.size(); ++i) ::munmap(maps_[i], block_size_[i]);
+    maps_.clear();
+    block_size_.clear();
+    fresh_.clear();
+    ioctl_retry(fd_, kBlockFree, nullptr);
+    ::close(fd_);
+    fd_ = -1;
+    have_cur_ = false;
+}
+
+// Makes cur_ a block that is free to fill: one never queued, else the next
+// one the DMA has finished with (waits up to kDacTimeoutMs for it).
+void PlutoTx::next_block() {
+    if (!fresh_.empty()) {
+        cur_ = fresh_.front();
+        fresh_.erase(fresh_.begin());
+    } else {
+        // poll() may report room before a block is really back: retry the
+        // dequeue until the deadline.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kDacTimeoutMs);
+        IioBlock b{};
+        while (true) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+            if (left <= 0) throw IiodError("TX DMA stalled: no block back from the DAC in 1 s");
+            pollfd p{fd_, POLLOUT, 0};
+            const int r = ::poll(&p, 1, static_cast<int>(left));
+            if (r < 0 && errno != EINTR) throw IiodError(std::string("TX DMA poll: ") + std::strerror(errno), -errno);
+            if (r <= 0) continue;
+            b = IioBlock{};
+            if (ioctl_retry(fd_, kBlockDequeue, &b) == 0) break;
+            if (errno != EAGAIN && errno != EBUSY)
+                throw IiodError(std::string("TX DMA dequeue: ") + std::strerror(errno), -errno);
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        }
+        if (b.id >= maps_.size()) throw IiodError("TX DMA dequeue: bad block id");
+        cur_ = b.id;
+    }
+    cur_used_ = 0;
+    have_cur_ = true;
 }
 
 void PlutoTx::write(const int16_t* iq, size_t samples) {
@@ -173,13 +257,22 @@ void PlutoTx::write(const int16_t* iq, size_t samples) {
         const char* p = reinterpret_cast<const char*>(iq);
         size_t left = samples * 4;
         while (left > 0) {
-            const ssize_t n = ::write(fd_, p, left);
-            if (n < 0) {
-                if (errno == EINTR) continue;
-                throw IiodError(std::string("TX DMA write: ") + std::strerror(errno), -errno);
-            }
+            if (!have_cur_) next_block();
+            const size_t room = block_size_[cur_] - cur_used_;
+            const size_t n = std::min(room, left);
+            std::memcpy(static_cast<char*>(maps_[cur_]) + cur_used_, p, n);
+            cur_used_ += n;
             p += n;
-            left -= static_cast<size_t>(n);
+            left -= n;
+            if (cur_used_ == block_size_[cur_]) {
+                IioBlock b{};
+                b.id = cur_;
+                b.size = block_size_[cur_];
+                b.bytes_used = block_size_[cur_];
+                if (ioctl_retry(fd_, kBlockEnqueue, &b) < 0)
+                    throw IiodError(std::string("TX DMA enqueue: ") + std::strerror(errno), -errno);
+                have_cur_ = false;
+            }
         }
         return;
     }

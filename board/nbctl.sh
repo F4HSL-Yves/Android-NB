@@ -61,14 +61,19 @@ start_nb() {
     pause_zynqrx
     stop_nbd
     cp "$NB_DIR/nbd" /tmp/nbd && chmod 755 /tmp/nbd || { log "cannot copy $NB_DIR/nbd"; return 1; }
-    touch "$RUN_FLAG"
+    # The flag holds this start's token: a restart loop left over from an
+    # earlier start (asleep between two runs while stop_nbd removed the flag)
+    # sees another token and ends instead of starting a second nbd.
+    token="$$.$(date +%s)"
+    echo "$token" >"$RUN_FLAG"
     # Restarted if it ever exits, until the mode changes. Status lines are
     # off (--quiet): the log lives in RAM and the app shows the status.
     (
-        while [ -f "$RUN_FLAG" ]; do
+        mine() { [ "$(cat "$RUN_FLAG" 2>/dev/null)" = "$token" ]; }
+        while mine; do
             echo "--- nbd start $(date)" >>"$LOG"
             /tmp/nbd $NBD_ARGS --wisdom "$NB_DIR/" --quiet >>"$LOG" 2>&1
-            [ -f "$RUN_FLAG" ] && sleep 3
+            mine && sleep 3
             # Keep the log small.
             [ "$(wc -c <"$LOG")" -gt 200000 ] && tail -c 50000 "$LOG" >"$LOG.1" && mv "$LOG.1" "$LOG"
         done

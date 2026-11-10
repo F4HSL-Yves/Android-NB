@@ -30,10 +30,10 @@ std::string tx_status_json(const TxStatus& s) {
     std::snprintf(buf, sizeof buf,
                   "{\"type\":\"tx\",\"state\":\"%s\",\"message\":\"%s\",\"owner\":%d,\"uplink\":%.0f,\"lo\":%.0f,"
                   "\"cal\":%.0f,\"tune\":%s,\"mic\":%.1f,\"alc\":%.1f,\"out\":%.1f,\"underruns\":%llu,"
-                  "\"dropped\":%llu,\"on_s\":%.1f,\"dac\":%.0f}",
+                  "\"dropped\":%llu,\"on_s\":%.1f,\"dac\":%.0f,\"sink\":\"%s\"}",
                   s.state.c_str(), json_escape(s.message).c_str(), s.owner, s.uplink_hz, s.lo_hz, s.cal_hz,
                   s.tune ? "true" : "false", std::fmax(-200.0, s.mic_db), s.alc_db, std::fmax(-200.0, s.out_db),
-                  static_cast<unsigned long long>(s.underruns), static_cast<unsigned long long>(s.dropped), s.on_s, s.dac_sps);
+                  static_cast<unsigned long long>(s.underruns), static_cast<unsigned long long>(s.dropped), s.on_s, s.dac_sps, s.sink.c_str());
     return buf;
 }
 
@@ -203,6 +203,7 @@ void Transmitter::run() {
             std::lock_guard<std::mutex> lk(mu_);
             st_.state = "on";
             st_.lo_hz = sink->lo_hz();
+            st_.sink = sink->kind();
         }
         notify();
 
