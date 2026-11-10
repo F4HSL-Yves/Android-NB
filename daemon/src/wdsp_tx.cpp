@@ -39,6 +39,10 @@ constexpr int kOutPeak = 15;   // TXA_OUT_PK
 // passband given as +200..+2800 Hz comes out as exp(-j w t), below 0 Hz.
 // nbd wants USB above 0 Hz, so the output is conjugated. test_tx checks it.
 constexpr bool kConjugate = true;
+// The ALC holds the peaks at 0 dB; the output sits 3 dB below that so the
+// DAC and the PA keep some headroom (the tune carrier included, so a PA set
+// up with it is still set for the voice peaks).
+constexpr float kOutScale = 0.708f;
 }  // namespace
 
 WdspTx::WdspTx(int channel, int block, int dsp_size) : channel_(channel), block_(block) {
@@ -96,8 +100,8 @@ void WdspTx::process(const float* mic, std::vector<cf>& out) {
     fexchange0(channel_, in_.data(), out_.data(), &error);
     out.resize(static_cast<size_t>(block_));
     for (int i = 0; i < block_; ++i) {
-        const float re = static_cast<float>(out_[2 * i]);
-        const float im = static_cast<float>(out_[2 * i + 1]);
+        const float re = static_cast<float>(out_[2 * i]) * kOutScale;
+        const float im = static_cast<float>(out_[2 * i + 1]) * kOutScale;
         out[static_cast<size_t>(i)] = kConjugate ? cf(re, -im) : cf(re, im);
     }
 }

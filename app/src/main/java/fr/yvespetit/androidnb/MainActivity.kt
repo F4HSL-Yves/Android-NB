@@ -36,6 +36,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -243,7 +244,6 @@ private fun MainScreen(c: NbConnection) {
             )
         }
         ChipRow("Vue", spans, spans.firstOrNull { it.first == span }, { it.second }) { span = it.first }
-        ChipRow("Chute", waterfallRates, waterfallRate, { if (it == 0) "Off" else "$it/s" }) { waterfallRate = it }
 
         // Frequency
         Text(
@@ -278,20 +278,6 @@ private fun MainScreen(c: NbConnection) {
         BeaconPanel(status)
         SMeter(status?.signalDb)
 
-        // Settings
-        ChipRow("Filtre", filters, filters.firstOrNull { it.low == status?.filterLowHz && it.high == status?.filterHighHz }, { it.label }) {
-            c.setFilter(it.low, it.high)
-        }
-        ChipRow("AGC", agcModes, agcModes.firstOrNull { it.second == status?.agc }, { it.first }) { c.setAgc(it.second) }
-        ChipRow("Bruit", nrModes, nrModes.firstOrNull { it.second == status?.nr }, { it.first }) {
-            prefs.edit().putInt("nr", it.second).apply()
-            c.setNr(it.second)
-        }
-        ChipRow("Débit", bitrates, status?.bitrate, { "${it / 1000}k" }) { c.setBitrate(it) }
-        ChipRow("Tampon", buffers, bufferPackets, { "${it * 20} ms" }) {
-            bufferPackets = it
-            c.setPrefillPackets(it)
-        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Volume", modifier = Modifier.width(72.dp))
             Slider(value = volume, onValueChange = {
@@ -300,20 +286,40 @@ private fun MainScreen(c: NbConnection) {
             })
         }
 
-        val s = c.stats
-        Text(
-            String.format(
-                Locale.FRANCE, "Audio %.1f kbit/s • tampon %d ms • perdus %d • jetés %d • coupures %d",
-                s.kbps, s.bufferMs, s.lost, s.discarded, s.underruns,
-            ) + if (s.waterfallKbps > 0) String.format(Locale.FRANCE, " • chute %.0f kbit/s", s.waterfallKbps) else "",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        hello?.let {
+        var advanced by rememberSaveable { mutableStateOf(false) }
+        TextButton(onClick = { advanced = !advanced }) {
+            Text(if (advanced) "Réglages avancés ▾" else "Réglages avancés ▸")
+        }
+        if (advanced) {
+            ChipRow("Chute", waterfallRates, waterfallRate, { if (it == 0) "Off" else "$it/s" }) { waterfallRate = it }
+            ChipRow("Filtre", filters, filters.firstOrNull { it.low == status?.filterLowHz && it.high == status?.filterHighHz }, { it.label }) {
+                c.setFilter(it.low, it.high)
+            }
+            ChipRow("AGC", agcModes, agcModes.firstOrNull { it.second == status?.agc }, { it.first }) { c.setAgc(it.second) }
+            ChipRow("Bruit", nrModes, nrModes.firstOrNull { it.second == status?.nr }, { it.first }) {
+                prefs.edit().putInt("nr", it.second).apply()
+                c.setNr(it.second)
+            }
+            ChipRow("Débit", bitrates, status?.bitrate, { "${it / 1000}k" }) { c.setBitrate(it) }
+            ChipRow("Tampon", buffers, bufferPackets, { "${it * 20} ms" }) {
+                bufferPackets = it
+                c.setPrefillPackets(it)
+            }
+            val s = c.stats
             Text(
-                "nbd ${it.source} • chute ${it.spectrumSource} • ${Qo100.formatMHz(it.minFreqHz)} – ${Qo100.formatMHz(it.maxFreqHz)}" +
-                    (status?.let { st -> " • ${st.clients} client(s)" } ?: ""),
+                String.format(
+                    Locale.FRANCE, "Audio %.1f kbit/s • tampon %d ms • perdus %d • jetés %d • coupures %d",
+                    s.kbps, s.bufferMs, s.lost, s.discarded, s.underruns,
+                ) + if (s.waterfallKbps > 0) String.format(Locale.FRANCE, " • chute %.0f kbit/s", s.waterfallKbps) else "",
                 style = MaterialTheme.typography.bodySmall,
             )
+            hello?.let {
+                Text(
+                    "nbd ${it.source} • chute ${it.spectrumSource} • ${Qo100.formatMHz(it.minFreqHz)} – ${Qo100.formatMHz(it.maxFreqHz)}" +
+                        (status?.let { st -> " • ${st.clients} client(s)" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }
@@ -404,11 +410,11 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
         }
     }
     var comp by rememberSaveable { mutableStateOf(prefs.getBoolean("comp", false)) }
-    var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain", 10).toFloat()) }
+    var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain_db", 0).toFloat()) }
     LaunchedEffect(connected) {
         if (connected) {
             c.setTxCal(prefs.getInt("tx_cal", 0))
-            c.setMicGain(prefs.getInt("mic_gain", 10))
+            c.setMicGain(prefs.getInt("mic_gain_db", 0))
             c.setCompressor(prefs.getBoolean("comp", false))
         }
     }
@@ -485,7 +491,7 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
                 value = micGain, valueRange = -10f..30f, steps = 39,
                 onValueChange = { micGain = Math.round(it).toFloat() },
                 onValueChangeFinished = {
-                    prefs.edit().putInt("mic_gain", micGain.toInt()).apply()
+                    prefs.edit().putInt("mic_gain_db", micGain.toInt()).apply()
                     c.setMicGain(micGain.toInt())
                 },
                 enabled = connected,
