@@ -94,6 +94,13 @@ void Transmitter::set_tune(bool on, double audio_hz) {
     tune_dirty_ = true;
 }
 
+void Transmitter::set_eq(double bass_db, double treble_db) {
+    std::lock_guard<std::mutex> lk(mu_);
+    eq_bass_ = bass_db;
+    eq_treble_ = treble_db;
+    eq_dirty_ = true;
+}
+
 void Transmitter::set_compressor(bool on, double db) {
     std::lock_guard<std::mutex> lk(mu_);
     comp_on_ = on;
@@ -189,7 +196,7 @@ void Transmitter::run() {
             st_.state = "starting";
             st_.owner = owner_;
             st_.cal_hz = cal_hz_;
-            tune_dirty_ = mic_gain_dirty_ = pass_dirty_ = comp_dirty_ = true;
+            tune_dirty_ = mic_gain_dirty_ = pass_dirty_ = comp_dirty_ = eq_dirty_ = true;
         }
         notify();
 
@@ -249,8 +256,9 @@ void Transmitter::run() {
                     if (tune_dirty_) wdsp->set_tune(tune_, tune_hz_);
                     if (mic_gain_dirty_) wdsp->set_mic_gain_db(mic_gain_db_);
                     if (comp_dirty_) wdsp->set_compressor(comp_on_, comp_db_);
+                    if (eq_dirty_) wdsp->set_eq(eq_bass_, eq_treble_);
                     if (pass_dirty_) wdsp->set_passband(pass_low_, pass_high_);
-                    tune_dirty_ = mic_gain_dirty_ = pass_dirty_ = comp_dirty_ = false;
+                    tune_dirty_ = mic_gain_dirty_ = pass_dirty_ = comp_dirty_ = eq_dirty_ = false;
                     dial = dial_hz_;
                     cal = cal_hz_;
                 }

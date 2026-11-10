@@ -437,6 +437,10 @@ int main(int argc, char** argv) {
                 filter_high = c.b;
                 rx.set_usb(filter_low, filter_high);
                 break;
+            case nb::Command::TxEq:
+                if (!tx) error = "this nbd has no transmitter (--tx)";
+                else tx->set_eq(c.a, c.b);
+                break;
             case nb::Command::Nr:
                 nr = static_cast<int>(c.a);
                 nr_applied = -1;  // applied below, unless transmitting

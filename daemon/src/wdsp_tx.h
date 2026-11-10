@@ -23,6 +23,8 @@ public:
     void set_passband(double low_hz, double high_hz);  // audio, USB
     void set_mic_gain_db(double db);                   // before the leveler
     void set_compressor(bool on, double gain_db = 6.0);
+    // Two-knob voice EQ before the leveler, dB at 200 Hz / 2.7 kHz. 0/0: off.
+    void set_eq(double bass_db, double treble_db);
     // Carrier at dial + hz instead of the microphone (magnitude 0..1).
     // Full scale by default: the carrier stands for the voice peaks (the ALC
     // holds them at 0 dB), so the PA is set up for the PEP.

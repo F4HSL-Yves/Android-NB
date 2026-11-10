@@ -25,6 +25,8 @@ void SetTXAPostGenMode(int channel, int mode);
 void SetTXAPostGenToneMag(int channel, double mag);
 void SetTXAPostGenToneFreq(int channel, double freq);
 double GetTXAMeter(int channel, int mt);
+void SetTXAEQRun(int channel, int run);
+void SetTXAEQProfile(int channel, int nfreqs, double* F, double* G);
 }
 
 namespace nb {
@@ -83,6 +85,19 @@ void WdspTx::set_tune(bool on, double hz, double magnitude) {
     SetTXAPostGenToneFreq(channel_, kConjugate ? hz : -hz);
     SetTXAPostGenToneMag(channel_, magnitude);
     SetTXAPostGenRun(channel_, on ? 1 : 0);
+}
+
+void WdspTx::set_eq(double bass_db, double treble_db) {
+    if (bass_db == 0.0 && treble_db == 0.0) {
+        SetTXAEQRun(channel_, 0);
+        return;
+    }
+    // F[0] / G[0] are WDSP's preamp slot; the curve goes through the points.
+    double F[] = {0.0, 150.0, 400.0, 1000.0, 2000.0, 2900.0};
+    double G[] = {0.0, bass_db, bass_db * 0.5, 0.0, treble_db * 0.6, treble_db};
+    SetTXAEQRun(channel_, 0);
+    SetTXAEQProfile(channel_, 5, F, G);
+    SetTXAEQRun(channel_, 1);
 }
 
 void WdspTx::flush() {

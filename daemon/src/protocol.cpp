@@ -69,6 +69,11 @@ Command parse_command(const std::string& json, std::string& error) {
             if (c.a < -20 || c.a > 30) error = "micgain: db -20..30";
             else c.type = Command::MicGain;
         }
+    } else if (cmd == "txeq") {
+        if (num("bass", c.a) && num("treble", c.b)) {
+            if (c.a < -12 || c.a > 12 || c.b < -12 || c.b > 12) error = "txeq: bass, treble -12..12";
+            else c.type = Command::TxEq;
+        }
     } else if (cmd == "nr") {
         if (num("mode", c.a)) {
             if (c.a < 0 || c.a > 2) error = "nr: mode 0..2";

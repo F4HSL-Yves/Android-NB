@@ -67,6 +67,7 @@ public:
     void set_tune(bool on, double audio_hz);
     void set_mic_gain_db(double db);
     void set_compressor(bool on, double db);
+    void set_eq(double bass_db, double treble_db);
     void set_passband(double low_hz, double high_hz);
     void mic_packet(int client, uint16_t seq, std::string opus);
     void client_closed(int client);
@@ -100,6 +101,8 @@ private:
     bool comp_on_ = false;
     double comp_db_ = 10;
     bool comp_dirty_ = true;
+    double eq_bass_ = 0, eq_treble_ = 0;
+    bool eq_dirty_ = true;
     double pass_low_ = 200, pass_high_ = 2800;
     bool pass_dirty_ = true;
     std::chrono::steady_clock::time_point last_mic_;

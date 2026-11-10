@@ -144,6 +144,7 @@ void test_upconverter() {
 void test_wdsp_sideband() {
     std::printf("WDSP TX: microphone tone comes out as USB, tune carrier\n");
     nb::WdspTx tx(1, 512, 1024);
+    tx.set_eq(-6, 3);  // voice EQ on: the sideband checks below must still hold
     std::vector<float> mic(512);
     std::vector<nb::cf> out;
     std::vector<std::complex<double>> all;
@@ -228,6 +229,8 @@ void test_protocol() {
     CHECK(c.type == nb::Command::MicGain && c.a == 6.0, "micgain");
     c = nb::parse_command("{\"cmd\":\"comp\",\"on\":1,\"db\":12}", err);
     CHECK(c.type == nb::Command::Comp && c.a == 1.0 && c.b == 12.0, "comp");
+    c = nb::parse_command("{\"cmd\":\"txeq\",\"bass\":-6,\"treble\":4}", err);
+    CHECK(c.type == nb::Command::TxEq && c.a == -6.0 && c.b == 4.0, "txeq");
     c = nb::parse_command("{\"cmd\":\"comp\",\"on\":1,\"db\":40}", err);
     CHECK(c.type == nb::Command::None && !err.empty(), "comp out of range");
     uint16_t seq = 0;

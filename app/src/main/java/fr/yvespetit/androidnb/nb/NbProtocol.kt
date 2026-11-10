@@ -188,6 +188,8 @@ object NbProtocol {
     fun txCalCommand(hz: Int) = """{"cmd":"txcal","hz":$hz}"""
     fun micGainCommand(db: Int) = """{"cmd":"micgain","db":$db}"""
 
+    fun txEqCommand(bassDb: Int, trebleDb: Int) = """{"cmd":"txeq","bass":$bassDb,"treble":$trebleDb}"""
+
     const val TX_CAL_AUTO = """{"cmd":"txcal_auto"}"""
 
     fun compCommand(on: Boolean, db: Int = 10) = """{"cmd":"comp","on":${if (on) 1 else 0},"db":$db}"""

@@ -410,12 +410,15 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
         }
     }
     var comp by rememberSaveable { mutableStateOf(prefs.getBoolean("comp", false)) }
+    var eqBass by rememberSaveable { mutableStateOf(prefs.getInt("eq_bass", 0).toFloat()) }
+    var eqTreble by rememberSaveable { mutableStateOf(prefs.getInt("eq_treble", 0).toFloat()) }
     var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain_db", 0).toFloat()) }
     LaunchedEffect(connected) {
         if (connected) {
             c.setTxCal(prefs.getInt("tx_cal", 0))
             c.setMicGain(prefs.getInt("mic_gain_db", 0))
             c.setCompressor(prefs.getBoolean("comp", false))
+            c.setTxEq(prefs.getInt("eq_bass", 0), prefs.getInt("eq_treble", 0))
         }
     }
 
@@ -493,6 +496,32 @@ private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
                 onValueChangeFinished = {
                     prefs.edit().putInt("mic_gain_db", micGain.toInt()).apply()
                     c.setMicGain(micGain.toInt())
+                },
+                enabled = connected,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(String.format(Locale.FRANCE, "Graves %+.0f dB", eqBass), modifier = Modifier.width(96.dp),
+                style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = eqBass, valueRange = -12f..12f, steps = 23,
+                onValueChange = { eqBass = Math.round(it).toFloat() },
+                onValueChangeFinished = {
+                    prefs.edit().putInt("eq_bass", eqBass.toInt()).apply()
+                    c.setTxEq(eqBass.toInt(), eqTreble.toInt())
+                },
+                enabled = connected,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(String.format(Locale.FRANCE, "Aigus %+.0f dB", eqTreble), modifier = Modifier.width(96.dp),
+                style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = eqTreble, valueRange = -12f..12f, steps = 23,
+                onValueChange = { eqTreble = Math.round(it).toFloat() },
+                onValueChangeFinished = {
+                    prefs.edit().putInt("eq_treble", eqTreble.toInt()).apply()
+                    c.setTxEq(eqBass.toInt(), eqTreble.toInt())
                 },
                 enabled = connected,
             )
