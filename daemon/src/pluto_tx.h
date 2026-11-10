@@ -7,6 +7,11 @@
 // transponder) and can cut the RF at once (TX LO power down), which is
 // what Tezuka's tx/mute does.
 //
+// On the board itself (iiod host 127.0.0.1) the samples bypass iiod: its
+// WRITEBUF path proved far too slow for 12 MB/s (about 1/8 of real time on
+// the FishBall), so PlutoTx writes to /dev/iio:deviceN directly, with the
+// buffer set up through sysfs. iiod still does the attributes and the mute.
+//
 // pluto_stream must leave the DMA free: its tx/stream/mode has to be "pass"
 // (the app sets it over MQTT before the first transmission).
 #pragma once
@@ -42,6 +47,8 @@ struct PlutoTxConfig {
     double expected_rate = 3072000.0;
     size_t buffer_samples = 32768;  // ~10.7 ms per DMA block
     int kernel_buffers = 4;
+    // Direct /dev/iio write when iiod is local and the device node exists.
+    bool local_dma = true;
 };
 
 class PlutoTx : public TxSink {
@@ -61,7 +68,15 @@ private:
     IioDeviceInfo phy_, dds_;
     bool connected_ = false, open_ = false;
     double rate_ = 0, lo_ = 0;
+    // Local DMA path: sysfs directory of the dds core and its /dev node.
+    std::string sysfs_;
+    int fd_ = -1;
+    void open_local();
+    void close_local() noexcept;
 };
+
+// "/sys/bus/iio/devices/iio:deviceN" of the device called name, or "".
+std::string find_local_iio_device(const std::string& name, const std::string& root = "/sys/bus/iio/devices");
 
 // Offline sink: writes the IQ to a file (cs16), for tests and for looking
 // at the transmitted spectrum on a PC. With pace, write() waits like a DAC.

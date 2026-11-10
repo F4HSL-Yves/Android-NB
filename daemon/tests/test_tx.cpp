@@ -6,6 +6,8 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -13,6 +15,7 @@
 
 #include "dsp.h"
 #include "opus_audio.h"
+#include "pluto_tx.h"
 #include "protocol.h"
 #include "transmitter.h"
 #include "tx_dsp.h"
@@ -354,7 +357,26 @@ void test_transmitter() {
 
 }  // namespace
 
+void test_local_iio_lookup() {
+    char tmpl[] = "/tmp/nbtx_sysfsXXXXXX";
+    const char* root = mkdtemp(tmpl);
+    CHECK(root != nullptr, "mkdtemp");
+    if (!root) return;
+    const std::string r = root;
+    const char* names[] = {"ad9361-phy", "xadc", "cf-ad9361-dds-core-lpc", "cf-ad9361-lpc"};
+    for (int i = 0; i < 4; ++i) {
+        const std::string d = r + "/iio:device" + std::to_string(i);
+        CHECK(std::system(("mkdir -p '" + d + "'").c_str()) == 0, "mkdir");
+        std::ofstream(d + "/name") << names[i] << "\n";
+    }
+    CHECK(nb::find_local_iio_device("cf-ad9361-dds-core-lpc", r) == r + "/iio:device2", "dds core lookup");
+    CHECK(nb::find_local_iio_device("cf-ad9361-dds", r).empty(), "no prefix match");
+    CHECK(nb::find_local_iio_device("ad9361-phy", "/nonexistent").empty(), "missing root");
+    CHECK(std::system(("rm -rf '" + r + "'").c_str()) == 0, "rm");
+}
+
 int main() {
+    test_local_iio_lookup();
     test_upconverter();
     test_wdsp_sideband();
     test_jitter();

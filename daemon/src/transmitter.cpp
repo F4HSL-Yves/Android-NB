@@ -30,10 +30,10 @@ std::string tx_status_json(const TxStatus& s) {
     std::snprintf(buf, sizeof buf,
                   "{\"type\":\"tx\",\"state\":\"%s\",\"message\":\"%s\",\"owner\":%d,\"uplink\":%.0f,\"lo\":%.0f,"
                   "\"cal\":%.0f,\"tune\":%s,\"mic\":%.1f,\"alc\":%.1f,\"out\":%.1f,\"underruns\":%llu,"
-                  "\"dropped\":%llu,\"on_s\":%.1f}",
+                  "\"dropped\":%llu,\"on_s\":%.1f,\"dac\":%.0f}",
                   s.state.c_str(), json_escape(s.message).c_str(), s.owner, s.uplink_hz, s.lo_hz, s.cal_hz,
                   s.tune ? "true" : "false", std::fmax(-200.0, s.mic_db), s.alc_db, std::fmax(-200.0, s.out_db),
-                  static_cast<unsigned long long>(s.underruns), static_cast<unsigned long long>(s.dropped), s.on_s);
+                  static_cast<unsigned long long>(s.underruns), static_cast<unsigned long long>(s.dropped), s.on_s, s.dac_sps);
     return buf;
 }
 
@@ -210,6 +210,7 @@ void Transmitter::run() {
         auto next_meter = started;
         std::string end_state = "off", end_message;
         bool emergency = false;
+        uint64_t written = 0;
         try {
             while (true) {
                 double dial, cal;
@@ -264,6 +265,7 @@ void Transmitter::run() {
                 iq.clear();
                 up->process(base.data(), base.size(), iq);
                 sink->write(iq.data(), iq.size() / 2);
+                written += iq.size() / 2;
 
                 const auto now = Clock::now();
                 if (now >= next_meter) {
@@ -279,6 +281,7 @@ void Transmitter::run() {
                         st_.underruns = jitter_.underruns();
                         st_.dropped = jitter_.dropped();
                         st_.on_s = seconds_since(started);
+                        if (st_.on_s > 0) st_.dac_sps = static_cast<double>(written) / st_.on_s;
                     }
                     notify();
                 }
