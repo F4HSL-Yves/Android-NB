@@ -3,7 +3,9 @@ package fr.yvespetit.androidnb
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +25,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -38,7 +41,8 @@ private val beacons = listOf(
 /**
  * Spectrum trace over the waterfall, with the receive passband, the dial
  * and the beacons. A tap centres the passband on the tapped signal; a
- * horizontal drag tunes like a knob.
+ * horizontal drag tunes like a knob; a two-finger pinch zooms the view
+ * (onZoom gets the scale factor, > 1 when the fingers spread).
  */
 @Composable
 fun BandView(
@@ -48,9 +52,11 @@ fun BandView(
     filterLowHz: Int,
     filterHighHz: Int,
     onTune: (Long) -> Unit,
+    onZoom: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tune by rememberUpdatedState(onTune)
+    val zoom by rememberUpdatedState(onZoom)
     val dial by rememberUpdatedState(dialHz)
     val passbandMid = (filterLowHz + filterHighHz) / 2
     val holder = remember { BitmapHolder() }
@@ -66,17 +72,43 @@ fun BandView(
                 }
             }
             .pointerInput(waterfall) {
-                detectHorizontalDragGestures(
-                    onDragStart = { drag[0] = dial.toDouble() },
-                    onHorizontalDrag = { change, dx ->
-                        change.consume()
-                        if (waterfall.spanHz > 0) {
+                // One finger: horizontal drag tunes. Two fingers: pinch zooms.
+                awaitEachGesture {
+                    val first = awaitFirstDown(requireUnconsumed = false)
+                    var dragging = false
+                    var pinching = false
+                    var travel = 0f
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                        if (event.changes.count { it.pressed } >= 2) {
+                            pinching = true
+                            val z = event.calculateZoom()
+                            if (z != 1f && z.isFinite()) zoom(z)
+                            event.changes.forEach { it.consume() }
+                            continue
+                        }
+                        if (pinching) {  // one finger left after a pinch: ignore it
+                            event.changes.forEach { it.consume() }
+                            continue
+                        }
+                        val ch = event.changes.firstOrNull { it.id == first.id } ?: break
+                        if (!dragging && ch.isConsumed) break  // the page scrolled
+                        val dx = ch.positionChange().x
+                        if (!dragging) {
+                            travel += dx
+                            if (kotlin.math.abs(travel) < viewConfiguration.touchSlop) continue
+                            dragging = true
+                            drag[0] = dial.toDouble()
+                        }
+                        ch.consume()
+                        if (waterfall.spanHz > 0 && dx != 0f) {
                             drag[0] -= dx.toDouble() / size.width * waterfall.spanHz
                             val step = if (waterfall.spanHz > 100_000) 100.0 else 10.0
                             tune(((drag[0] / step).roundToInt() * step).toLong())
                         }
-                    },
-                )
+                    }
+                }
             },
     ) {
         Canvas(modifier = Modifier.fillMaxWidth().height(300.dp)) {

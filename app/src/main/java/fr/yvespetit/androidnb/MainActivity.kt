@@ -110,6 +110,10 @@ private val bitrates = listOf(8000, 12000, 16000, 24000)
 private val buffers = listOf(4, 6, 10, 15)  // packets of 20 ms
 private val steps = listOf(10L, 100L, 1000L, 10000L)
 private val spans = listOf(520_000 to "Bande", 100_000 to "100 k", 25_000 to "25 k", 6_000 to "6 k")
+private fun formatSpan(hz: Int) =
+    if (hz >= 10_000) "${hz / 1000} k" else String.format(Locale.FRANCE, "%.1f k", hz / 1000.0)
+
+private const val MIN_SPAN_HZ = 3_000  // narrowest pinch zoom
 private val waterfallRates = listOf(0, 4, 8, 12)  // lines per second, 0 = off
 
 @Composable
@@ -230,6 +234,7 @@ private fun MainScreen(c: NbConnection) {
             }
         }
         LaunchedEffect(connected, hello, span, viewCenter, waterfallRate, bandWidthPx) {
+            kotlinx.coroutines.delay(120)  // a pinch changes the span every frame: send once it settles
             // Bins follow the screen width (one per pixel, 1024 at most, to spare 4G data).
             if (connected && hello != null && hello.spectrumSource != "off" && (bandWidthPx > 0 || waterfallRate == 0)) {
                 val bins = if (bandWidthPx > 0) bandWidthPx.coerceIn(128, 1024) else 768
@@ -240,10 +245,11 @@ private fun MainScreen(c: NbConnection) {
             BandView(
                 waterfall = c.waterfall, version = c.waterfallVersion, dialHz = dial,
                 filterLowHz = filterLow, filterHighHz = filterHigh, onTune = { tuneTo(it) },
+                onZoom = { f -> span = kotlin.math.round(span / f).toInt().coerceIn(MIN_SPAN_HZ, spans[0].first) },
                 modifier = Modifier.onSizeChanged { bandWidthPx = it.width },
             )
         }
-        ChipRow("Vue", spans, spans.firstOrNull { it.first == span }, { it.second }) { span = it.first }
+        ChipRow(if (spans.any { it.first == span }) "Vue" else "Vue ${formatSpan(span)}", spans, spans.firstOrNull { it.first == span }, { it.second }) { span = it.first }
 
         // Frequency
         Text(
