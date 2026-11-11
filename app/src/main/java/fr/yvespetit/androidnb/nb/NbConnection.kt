@@ -123,10 +123,12 @@ class NbConnection {
      * Stops listening. With [releaseBoard], the board's radio is also given
      * back (nbd stopped through nbctl's datv mode, zynqrx left idle) so
      * another program such as SDR Console can use it; the next [connect]
-     * asks for nb mode again. Skipped when another client is still on nbd.
+     * asks for nb mode again. Done even with other clients on nbd: through
+     * a VPN every phone shows up as the same address, and a connection the
+     * board still believes open would otherwise keep the radio forever.
      */
     fun disconnect(releaseBoard: Boolean = false) {
-        val release = releaseBoard && boardMode == "nb" && (status?.clients ?: 0) <= 1
+        val release = releaseBoard && boardMode == "nb"
         pttOff()
         pttThread?.join(3000)
         pttThread = null
