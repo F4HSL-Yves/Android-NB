@@ -10,7 +10,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.heightIn
@@ -384,12 +386,49 @@ private fun HomeTab(
         }
         SMeter(status?.signalDb)
 
-        if (hello?.tx == true) TxControls(c, dial, connected, muteTx, onMuteTx)
+        // Mute in TX and three memories: tap recalls, long press stores the dial.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (hello?.tx == true) {
+                FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet TX") })
+            }
+            for (slot in 1..3) MemoryChip(slot, dial, onTune, modifier = Modifier.weight(1f))
+        }
+        if (hello?.tx == true) TxControls(c, dial, connected)
     }
     if (goTo) GoToDialog(dial, onDismiss = { goTo = false }, onGo = {
         onTune(it)
         goTo = false
     })
+}
+
+/** Memory slot: tap tunes to it, long press stores the current dial. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MemoryChip(slot: Int, dial: Long, onTune: (Long) -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
+    var hz by remember { mutableLongStateOf(prefs.getLong("mem$slot", 0L)) }
+    val label = if (hz == 0L) "M$slot" else
+        String.format(Locale.FRANCE, "M%d %.1f", slot, (hz % 1_000_000L) / 1000.0)
+    val active = hz != 0L && hz == dial
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier.height(32.dp).clip(RoundedCornerShape(8.dp))
+            .background(if (active) MaterialTheme.colorScheme.secondaryContainer else Color(0xFF2A2A2A))
+            .combinedClickable(
+                onClick = {
+                    if (hz != 0L) onTune(hz)
+                    else android.widget.Toast.makeText(context, "Appui long pour mémoriser en M$slot", android.widget.Toast.LENGTH_SHORT).show()
+                },
+                onLongClick = {
+                    hz = dial
+                    prefs.edit().putLong("mem$slot", dial).apply()
+                    android.widget.Toast.makeText(context, "M$slot = ${Qo100.formatMHz(dial)}", android.widget.Toast.LENGTH_SHORT).show()
+                },
+            ),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+    }
 }
 
 @Composable
@@ -413,7 +452,7 @@ private fun GoToDialog(dial: Long, onDismiss: () -> Unit, onGo: (Long) -> Unit) 
 
 /** PTT and RF gain: the transmit controls used during a QSO. */
 @Composable
-private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, muteTx: Boolean, onMuteTx: (Boolean) -> Unit) {
+private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
     val context = LocalContext.current
     var gain by remember { mutableFloatStateOf(-30f) }
     var gainTouched by remember { mutableStateOf(false) }
@@ -432,9 +471,8 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, muteTx: 
         c.pttMessage.isNotEmpty() -> c.pttMessage
         else -> null
     }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet en TX") })
-        Text(line ?: "", style = MaterialTheme.typography.bodySmall, maxLines = 2, modifier = Modifier.weight(1f),
+    line?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2,
             color = if (c.ptt == NbConnection.Ptt.OFF) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
