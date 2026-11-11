@@ -261,12 +261,16 @@ private fun MainScreen(c: NbConnection) {
                 HomeTab(
                     c = c, dial = dial, step = step, rit = rit, span = span, viewCenter = viewCenter,
                     waterfallRate = waterfallRate, filterLow = filterLow, filterHigh = filterHigh,
-                    permissionError = permissionError,
+                    permissionError = permissionError, muteTx = muteTx, onMuteTx = {
+                        muteTx = it
+                        prefs.edit().putBoolean("mute_rx_tx", it).apply()
+                    },
                     onListen = { listen() }, onTune = { tuneTo(it) }, onStep = { step = it }, onRit = { setRit(it) },
                     onSpan = { span = it }, onBandWidth = { bandWidthPx = it },
                 )
             } else {
                 SettingsTab(
+                    txTab = tab == 2,
                     c = c, prefs = prefs, host = host, port = port,
                     onHost = { host = it }, onPort = { port = it }, onListen = { listen() },
                     permissionError = permissionError,
@@ -278,10 +282,6 @@ private fun MainScreen(c: NbConnection) {
                     tune = tune, onTune = {
                         tune = it
                         c.setTune(it)
-                    },
-                    muteTx = muteTx, onMuteTx = {
-                        muteTx = it
-                        prefs.edit().putBoolean("mute_rx_tx", it).apply()
                     },
                     arduino = arduino, onArduino = {
                         arduino = it
@@ -295,7 +295,10 @@ private fun MainScreen(c: NbConnection) {
         }
         NavigationBar(windowInsets = WindowInsets(0)) {
             NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("📡") }, label = { Text("Accueil") })
-            NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("⚙") }, label = { Text("Réglages") })
+            NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("🎧") }, label = { Text("Réception") })
+            if (hello?.tx == true || tab == 2) {
+                NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🎙") }, label = { Text("Émission") })
+            }
         }
     }
 }
@@ -303,7 +306,7 @@ private fun MainScreen(c: NbConnection) {
 @Composable
 private fun HomeTab(
     c: NbConnection, dial: Long, step: Long, rit: Int, span: Int, viewCenter: Long, waterfallRate: Int,
-    filterLow: Int, filterHigh: Int, permissionError: String?,
+    filterLow: Int, filterHigh: Int, permissionError: String?, muteTx: Boolean, onMuteTx: (Boolean) -> Unit,
     onListen: () -> Unit, onTune: (Long) -> Unit, onStep: (Long) -> Unit, onRit: (Int) -> Unit,
     onSpan: (Int) -> Unit, onBandWidth: (Int) -> Unit,
 ) {
@@ -380,7 +383,7 @@ private fun HomeTab(
         }
         SMeter(status?.signalDb)
 
-        if (hello?.tx == true) TxControls(c, dial, connected)
+        if (hello?.tx == true) TxControls(c, dial, connected, muteTx, onMuteTx)
     }
     if (goTo) GoToDialog(dial, onDismiss = { goTo = false }, onGo = {
         onTune(it)
@@ -409,7 +412,7 @@ private fun GoToDialog(dial: Long, onDismiss: () -> Unit, onGo: (Long) -> Unit) 
 
 /** PTT and RF gain: the transmit controls used during a QSO. */
 @Composable
-private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
+private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, muteTx: Boolean, onMuteTx: (Boolean) -> Unit) {
     val context = LocalContext.current
     var gain by remember { mutableFloatStateOf(-30f) }
     var gainTouched by remember { mutableStateOf(false) }
@@ -453,8 +456,9 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
         c.pttMessage.isNotEmpty() -> c.pttMessage
         else -> null
     }
-    line?.let {
-        Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet en TX") })
+        Text(line ?: "", style = MaterialTheme.typography.bodySmall, maxLines = 2, modifier = Modifier.weight(1f),
             color = if (c.ptt == NbConnection.Ptt.OFF) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -474,11 +478,12 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
 
 @Composable
 private fun SettingsTab(
+    txTab: Boolean,
     c: NbConnection, prefs: android.content.SharedPreferences,
     host: String, port: String, onHost: (String) -> Unit, onPort: (String) -> Unit, onListen: () -> Unit,
     permissionError: String?,
     waterfallRate: Int, onWaterfallRate: (Int) -> Unit, bufferPackets: Int, onBuffer: (Int) -> Unit,
-    tune: Boolean, onTune: (Boolean) -> Unit, muteTx: Boolean, onMuteTx: (Boolean) -> Unit,
+    tune: Boolean, onTune: (Boolean) -> Unit,
     arduino: Boolean, onArduino: (Boolean) -> Unit,
     calibrating: Boolean, calibMessage: String?, onCalibrate: () -> Unit, canCalibrate: Boolean,
 ) {
@@ -490,6 +495,7 @@ private fun SettingsTab(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+      if (!txTab) {
         Section("Connexion")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -508,8 +514,10 @@ private fun SettingsTab(
             OutlinedButton(onClick = { c.disconnect() }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
         }
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+      }
 
-        if (hello?.tx == true) {
+        if (txTab && hello?.tx != true) Text("Cette carte n'émet pas (nbd lancé sans --tx).", style = MaterialTheme.typography.bodySmall)
+        if (txTab && hello?.tx == true) {
             Section("Émission")
             var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain_db", 0).toFloat()) }
             var eqBass by rememberSaveable { mutableStateOf(prefs.getInt("eq_bass", 0).toFloat()) }
@@ -537,7 +545,6 @@ private fun SettingsTab(
                     c.setCompressor(comp)
                 }, label = { Text("Compresseur") })
                 FilterChip(selected = tune, onClick = { onTune(!tune) }, label = { Text("Porteuse 1 kHz") })
-                FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet en TX") })
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("PTT par l'Arduino", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
@@ -591,6 +598,7 @@ private fun SettingsTab(
             }
         }
 
+      if (!txTab) {
         Section("Réception")
         ChipRow("Filtre", filters, filters.firstOrNull { it.low == status?.filterLowHz && it.high == status?.filterHighHz }, { it.label }) {
             c.setFilter(it.low, it.high)
@@ -621,6 +629,7 @@ private fun SettingsTab(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+      }
     }
 }
 
