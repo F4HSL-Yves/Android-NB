@@ -35,6 +35,8 @@ struct Scenario {
     double seconds = 40.0;
     bool keyed = true;                 // CW keying on/off
     double outage_from = -1.0, outage_to = -1.0;  // beacon absent in [from, to)
+    bool bpsk = false;                 // 400 Bd BPSK instead of CW (centre beacon)
+    double dc_amp = 0.0;               // carrier at the stream centre (LO leakage)
 };
 
 struct Result {
@@ -64,7 +66,11 @@ Result run(const Scenario& sc) {
     nb::BeaconLockConfig cfg;
     cfg.sample_rate = sc.fs;
     cfg.beacon_offset_hz = sc.beacon_offset;
+    cfg.bpsk = sc.bpsk;
     nb::BeaconLock lock(cfg);
+    std::uniform_int_distribution<int> bit(0, 1);
+    double symbol = 1.0;
+    long last_symbol = -1;
 
     std::mt19937 rng(1234);
     // Beacon amplitude 1: noise power per complex sample = fs / 10^(CN0/10).
@@ -88,8 +94,16 @@ Result run(const Scenario& sc) {
             if (ph_b > kPi) ph_b -= 2.0 * kPi;
             if (ph_i > kPi) ph_i -= 2.0 * kPi;
             const bool outage = t >= sc.outage_from && t < sc.outage_to;
-            const double a = (!outage && (!sc.keyed || key_down(t))) ? 1.0 : 0.0;
-            double re = a * std::cos(ph_b), im = a * std::sin(ph_b);
+            double a = (!outage && (!sc.keyed || key_down(t))) ? 1.0 : 0.0;
+            if (sc.bpsk) {
+                const long k = static_cast<long>(t * 400.0);
+                if (k != last_symbol) {
+                    last_symbol = k;
+                    symbol = bit(rng) ? 1.0 : -1.0;
+                }
+                a *= symbol;
+            }
+            double re = a * std::cos(ph_b) + sc.dc_amp, im = a * std::sin(ph_b);
             if (sc.interferer_offset != 0.0) {
                 re += sc.interferer_amp * std::cos(ph_i);
                 im += sc.interferer_amp * std::sin(ph_i);
@@ -170,6 +184,31 @@ int main() {
         CHECK(!r.locked_in_outage, "claimed lock during outage");
         CHECK(r.final_state == nb::LockState::Locked, "did not relock after outage");
         CHECK(r.max_error < 5.0, "max %.3f", r.max_error);
+    }
+    {
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        const Result r = run(sc);
+        report("BPSK beacon (squared)", r);
+        CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+        CHECK(r.final_state == nb::LockState::Locked, "final state");
+    }
+    {
+        // The centre beacon sits at the stream centre: LO leakage must not win.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 0.0;
+        sc.lnb_error0 = 21000.0;
+        sc.drift = 0.5;
+        sc.dc_amp = 2.0;
+        sc.interferer_offset = 0.0;
+        const Result r = run(sc);
+        report("BPSK beacon at centre, DC spur", r);
+        CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
     }
 
     if (failures) {

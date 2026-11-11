@@ -39,7 +39,8 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     const double fs = cfg_.sample_rate;
     const double w = cfg_.search_half_width_hz;
 
-    unsigned acq_decim = static_cast<unsigned>(std::floor(fs / (2.5 * w)));
+    // Squaring doubles the offsets: keep +/- 2w inside the decimated band.
+    unsigned acq_decim = static_cast<unsigned>(std::floor(fs / ((cfg_.bpsk ? 5.0 : 2.5) * w)));
     if (acq_decim < 1) acq_decim = 1;
     acq_rate_ = fs / acq_decim;
     acq_fir_ = make_decimator(fs, acq_decim, 1.05 * w);
@@ -52,7 +53,8 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     unsigned d2 = static_cast<unsigned>(std::lround(rate1 / 1000.0));
     if (d2 < 1) d2 = 1;
     trk_rate_ = rate1 / d2;
-    trk_fir1_ = make_decimator(fs, d1, 300.0);
+    // BPSK: the first stage keeps the 400 Bd main lobe for the squarer.
+    trk_fir1_ = make_decimator(fs, d1, cfg_.bpsk ? 700.0 : 300.0);
     trk_fir2_ = make_decimator(rate1, d2, 150.0);
     block_len_ = static_cast<unsigned>(std::lround(trk_rate_ * 0.04));
     if (block_len_ < 4) block_len_ = 4;
@@ -86,21 +88,29 @@ void BeaconLock::run_acquisition() {
     std::vector<std::complex<double>> spec(len);
     for (size_t i = 0; i < len; ++i) {
         const double hann = 0.5 - 0.5 * std::cos(2.0 * kPi * i / (len - 1));
-        spec[i] = std::complex<double>(acq_buf_[i].real(), acq_buf_[i].imag()) * hann;
+        std::complex<double> z(acq_buf_[i].real(), acq_buf_[i].imag());
+        if (cfg_.bpsk) z *= z;
+        spec[i] = z * hann;
     }
     acq_buf_.clear();
     fft_inplace(spec);
 
     const double bin_hz = acq_rate_ / len;
-    const long half = static_cast<long>(cfg_.search_half_width_hz / bin_hz);
+    const double mult = cfg_.bpsk ? 2.0 : 1.0;  // squared: the line sits at 2 f
+    const long half = static_cast<long>(mult * cfg_.search_half_width_hz / bin_hz);
     std::vector<double> power;
     power.reserve(2 * half + 1);
     long best = 0;
     double best_p = -1.0;
+    // The stream's own DC (LO leakage) is a carrier too, and squares into a
+    // line: when it falls in the window, keep it out of the peak search.
+    const double dc_hz = -mult * cfg_.beacon_offset_hz;
+    const double dc_guard_hz = 300.0;
     for (long k = -half; k <= half; ++k) {
         const size_t idx = static_cast<size_t>((k + static_cast<long>(len)) % static_cast<long>(len));
         const double p = std::norm(spec[idx]);
         power.push_back(p);
+        if (std::abs(k * bin_hz - dc_hz) < dc_guard_hz) continue;
         if (p > best_p) {
             best_p = p;
             best = k;
@@ -122,7 +132,7 @@ void BeaconLock::run_acquisition() {
         const double den = a - 2.0 * b + c;
         if (den != 0.0) delta = std::clamp(0.5 * (a - c) / den, -0.5, 0.5);
     }
-    enter_tracking(cfg_.beacon_offset_hz + (best + delta) * bin_hz);
+    enter_tracking(cfg_.beacon_offset_hz + (best + delta) * bin_hz / mult);
 }
 
 void BeaconLock::enter_tracking(double beacon_freq_hz) {
@@ -145,6 +155,9 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
     trk_nco_.mix_down(iq, scratch_.data(), n);
     stage1_.clear();
     trk_fir1_.process(scratch_.data(), n, stage1_);
+    if (cfg_.bpsk) {
+        for (cf& z : stage1_) z *= z;
+    }
     stage2_.clear();
     trk_fir2_.process(stage1_.data(), stage1_.size(), stage2_);
 
@@ -159,7 +172,8 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
         const double dt = block_len_ / trk_rate_;
         const bool coherent = prod_mag_ > 0.0 && std::abs(prod_) / prod_mag_ > kCoherenceGate;
         if (coherent) {
-            const double err = std::arg(prod_) * trk_rate_ / (2.0 * kPi);
+            double err = std::arg(prod_) * trk_rate_ / (2.0 * kPi);
+            if (cfg_.bpsk) err *= 0.5;
             const double limit = (state_ == LockState::Locked) ? kMaxLockedErrorHz : kMaxReacquireErrorHz;
             if (std::abs(err) <= limit) {
                 loop_update(err);

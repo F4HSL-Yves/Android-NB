@@ -16,6 +16,11 @@
 // so the loop simply coasts on its drift-rate estimate between CW elements.
 // A second-order loop follows a steadily drifting (warming) LNB with no
 // standing error.
+//
+// With cfg.bpsk the same chain locks on the BPSK centre beacon: acquisition
+// squares the decimated signal (a 400 Bd BPSK signal has no carrier, its
+// square has one at twice the frequency) and tracking squares after the
+// first, wider stage; measured frequencies are halved.
 #pragma once
 
 #include <cstddef>
@@ -42,6 +47,10 @@ struct BeaconLockConfig {
     // and before going back to a full search.
     double holdover_after_s = 5.0;
     double reacquire_after_s = 60.0;
+    // BPSK beacon (the 400 Bd centre beacon, 10489.750 MHz) instead of CW:
+    // the signal is squared before the measurements, which wipes the
+    // modulation and leaves a line at twice its frequency.
+    bool bpsk = false;
 };
 
 enum class LockState { Searching, Locked, Holdover };

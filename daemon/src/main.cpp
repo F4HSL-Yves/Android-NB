@@ -59,6 +59,7 @@ struct Options {
     double freq_hz = 10489900000.0;    // station to demodulate (USB dial)
     double beacon_hz = 10489500000.0;  // CW beacon
     double search_hz = 25000.0;
+    bool beacon_psk = false;
     std::string wisdom_dir;
     bool quiet = false;
     // Live source
@@ -115,6 +116,7 @@ void usage() {
                  "  --freq HZ        USB dial frequency to demodulate (default 10489900000)\n"
                  "  --beacon HZ      CW beacon frequency (default 10489500000)\n"
                  "  --search HZ      beacon search half width (default 25000)\n"
+                 "  --beacon-psk     the beacon is BPSK (automatic for 10489750000)\n"
                  "  --output FILE    48 kHz mono s16le audio, '-' for stdout\n"
                  "  --wisdom DIR     cache FFTW plans in DIR (recommended on the board)\n"
                  "  --quiet          no status lines on stderr\n");
@@ -138,6 +140,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--freq") o.freq_hz = std::atof(next("--freq"));
         else if (a == "--beacon") o.beacon_hz = std::atof(next("--beacon"));
         else if (a == "--search") o.search_hz = std::atof(next("--search"));
+        else if (a == "--beacon-psk") o.beacon_psk = true;
         else if (a == "--wisdom") o.wisdom_dir = next("--wisdom");
         else if (a == "--quiet") o.quiet = true;
         else if (a == "--source") o.source = next("--source");
@@ -309,6 +312,9 @@ int main(int argc, char** argv) {
     cfg.sample_rate = o.rate;
     cfg.beacon_offset_hz = o.beacon_hz - o.center_hz;
     cfg.search_half_width_hz = o.search_hz;
+    // The centre beacon is BPSK (no carrier): lock on its square.
+    cfg.bpsk = o.beacon_psk || std::abs(o.beacon_hz - 10489750000.0) < 1000.0;
+    if (!o.quiet) std::fprintf(stderr, "nbd: beacon lock on %.3f MHz (%s)\n", o.beacon_hz / 1e6, cfg.bpsk ? "BPSK" : "CW");
     if (std::abs(cfg.beacon_offset_hz) + cfg.search_half_width_hz > o.rate / 2) {
         std::fprintf(stderr, "nbd: the beacon search window falls outside the IQ bandwidth\n");
         return 2;
