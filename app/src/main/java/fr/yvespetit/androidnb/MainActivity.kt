@@ -21,6 +21,12 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.horizontalScroll
@@ -554,6 +560,7 @@ private fun SettingsTab(
             OutlinedButton(onClick = { c.disconnect() }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
         }
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        BoardInstallSection(host)
       }
 
         if (txTab && hello?.tx != true) Text("Cette carte n'émet pas (nbd lancé sans --tx).", style = MaterialTheme.typography.bodySmall)
@@ -671,6 +678,67 @@ private fun SettingsTab(
         }
       }
     }
+}
+
+/** Installs or updates nbd and its scripts on the board, from the APK, over ssh. */
+@Composable
+private fun BoardInstallSection(host: String) {
+    val context = LocalContext.current
+    val installer = remember { fr.yvespetit.androidnb.nb.BoardInstaller(context.applicationContext) }
+    val scope = rememberCoroutineScope()
+    var password by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(false) }
+    val lines = remember { mutableStateListOf<String>() }
+    // Android 17: ssh to the board needs "Local network" too.
+    val netLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) lines.add("Android refuse l'accès au réseau local : autorise « Réseau local » pour QO-100 NB.")
+    }
+    fun netGranted() = Build.VERSION.SDK_INT < 37 ||
+        context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+    Section("Installer sur la carte")
+    Text(
+        "Copie QO-100 NB sur la carte SD et l'ajoute au démarrage, par ssh. Sert aussi à mettre à jour " +
+            "la carte après une nouvelle version de l'appli. Le firmware Tezuka n'est pas modifié.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    if (!installer.available()) {
+        Text("Cette version de l'appli ne contient pas nbd (version de développement).",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        return
+    }
+    OutlinedTextField(
+        value = password, onValueChange = { password = it }, label = { Text("Mot de passe root de la carte") },
+        singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(
+            enabled = !running && host.isNotBlank() && password.isNotEmpty(),
+            onClick = {
+                if (!netGranted()) {
+                    netLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+                } else {
+                    running = true
+                    lines.clear()
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching {
+                                installer.install(host, password) { line -> scope.launch { lines.add(line) } }
+                            }
+                        }
+                        result.exceptionOrNull()?.let { lines.add("Échec : ${it.message}") }
+                        running = false
+                    }
+                }
+            },
+        ) { Text(if (running) "Installation…" else "Installer / mettre à jour") }
+        TextButton(enabled = !running, onClick = {
+            installer.forgetHost(host)
+            lines.clear()
+            lines.add("Clé ssh de $host oubliée : elle sera mémorisée à la prochaine installation.")
+        }) { Text("Oublier la clé") }
+    }
+    lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
 @Composable

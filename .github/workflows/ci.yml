@@ -55,8 +55,13 @@ jobs:
   android:
     name: Android app
     runs-on: ubuntu-24.04
+    needs: daemon-zynq  # the APK carries nbd for its board installer
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nbd-zynq-armhf
+          path: build-arm
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
