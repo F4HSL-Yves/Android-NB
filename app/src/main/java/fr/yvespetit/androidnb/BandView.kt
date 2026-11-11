@@ -8,8 +8,8 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -52,6 +52,7 @@ fun BandView(
     dialHz: Long,
     filterLowHz: Int,
     filterHighHz: Int,
+    ritHz: Int = 0,
     onTune: (Long) -> Unit,
     onZoom: (Float) -> Unit,
     viewLeftHz: Long = 0L,
@@ -69,7 +70,7 @@ fun BandView(
     val holder = remember { BitmapHolder() }
     val drag = remember { DoubleArray(1) }  // dial during a drag, Hz
     Box(
-        modifier = modifier.fillMaxWidth().height(300.dp).background(Color.Black)
+        modifier = modifier.fillMaxWidth().background(Color.Black)
             .pointerInput(waterfall) {
                 detectTapGestures { p ->
                     if (viewNow.spanHz > 0) {
@@ -119,7 +120,7 @@ fun BandView(
                 }
             },
     ) {
-        Canvas(modifier = Modifier.fillMaxWidth().height(300.dp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
             if (version < 0) return@Canvas  // reading version redraws on each new row
             val traceH = size.height * 0.3f
             val x0 = view.fractionOf(waterfall.leftHz) * size.width
@@ -129,7 +130,7 @@ fun BandView(
                 drawWaterfall(waterfall, holder, traceH, x0, x1)
                 drawTrace(waterfall, traceH, x0, x1)
             }
-            drawMarkers(view, dialHz, filterLowHz, filterHighHz)
+            drawMarkers(view, dialHz, ritHz, filterLowHz, filterHighHz)
         }
     }
 }
@@ -188,10 +189,11 @@ private fun DrawScope.drawTrace(w: Waterfall, h: Float, x0: Float, x1: Float) {
     drawPath(path, Color(0xFF80D8FF), style = Stroke(width = 1.5f))
 }
 
-private fun DrawScope.drawMarkers(w: BandAxis, dialHz: Long, low: Int, high: Int) {
+private fun DrawScope.drawMarkers(w: BandAxis, dialHz: Long, ritHz: Int, low: Int, high: Int) {
     if (w.spanHz == 0) return
-    val x0 = w.fractionOf(dialHz + low) * size.width
-    val x1 = w.fractionOf(dialHz + high) * size.width
+    // Passband where we listen (dial + RIT); red line on the dial (uplink).
+    val x0 = w.fractionOf(dialHz + ritHz + low) * size.width
+    val x1 = w.fractionOf(dialHz + ritHz + high) * size.width
     drawRect(Color(0x33FFFFFF), topLeft = Offset(x0, 0f), size = Size(maxOf(2f, x1 - x0), size.height))
     val xd = w.fractionOf(dialHz) * size.width
     drawLine(Color(0xFFFF5252), Offset(xd, 0f), Offset(xd, size.height), strokeWidth = 2f)

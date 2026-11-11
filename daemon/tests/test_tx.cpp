@@ -229,6 +229,12 @@ void test_protocol() {
     CHECK(c.type == nb::Command::MicGain && c.a == 6.0, "micgain");
     c = nb::parse_command("{\"cmd\":\"comp\",\"on\":1,\"db\":12}", err);
     CHECK(c.type == nb::Command::Comp && c.a == 1.0 && c.b == 12.0, "comp");
+    c = nb::parse_command("{\"cmd\":\"rit\",\"hz\":-250}", err);
+    CHECK(c.type == nb::Command::Rit && c.a == -250.0, "rit");
+    err.clear();
+    c = nb::parse_command("{\"cmd\":\"rit\",\"hz\":20000}", err);
+    CHECK(c.type == nb::Command::None && !err.empty(), "rit out of range");
+    err.clear();
     c = nb::parse_command("{\"cmd\":\"txeq\",\"bass\":-6,\"treble\":4}", err);
     CHECK(c.type == nb::Command::TxEq && c.a == -6.0 && c.b == 4.0, "txeq");
     c = nb::parse_command("{\"cmd\":\"comp\",\"on\":1,\"db\":40}", err);

@@ -344,6 +344,7 @@ class NbConnection {
     fun calibrateTx() = send(NbProtocol.TX_CAL_AUTO)
 
     fun tune(hz: Long) = send(NbProtocol.freqCommand(hz))
+    fun setRit(hz: Int) = send(NbProtocol.ritCommand(hz))
     fun setFilter(lowHz: Int, highHz: Int) = send(NbProtocol.filterCommand(lowHz, highHz))
     fun setAgc(mode: Int) = send(NbProtocol.agcCommand(mode))
     fun setNr(mode: Int) = send(NbProtocol.nrCommand(mode))

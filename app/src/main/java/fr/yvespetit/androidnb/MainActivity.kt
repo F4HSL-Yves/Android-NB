@@ -10,6 +10,17 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -116,21 +127,23 @@ private fun formatSpan(hz: Int) =
 private const val MIN_SPAN_HZ = 3_000  // narrowest pinch zoom
 private val waterfallRates = listOf(0, 4, 8, 12)  // lines per second, 0 = off
 
+private val ritRange = -3000f..3000f
+
 @Composable
 private fun MainScreen(c: NbConnection) {
     // The board address is remembered between launches.
     val prefs = LocalContext.current.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
     var host by rememberSaveable { mutableStateOf(prefs.getString("host", "192.168.1.125")!!) }
     var port by rememberSaveable { mutableStateOf(prefs.getString("port", "8073")!!) }
-    var dialText by rememberSaveable { mutableStateOf("10489,900") }
     var dial by rememberSaveable { mutableLongStateOf(10_489_900_000L) }
     var step by rememberSaveable { mutableLongStateOf(100L) }
+    var rit by rememberSaveable { mutableIntStateOf(0) }
     var bufferPackets by rememberSaveable { mutableIntStateOf(6) }
-    var volume by rememberSaveable { mutableFloatStateOf(1f) }
     var span by rememberSaveable { mutableIntStateOf(spans[0].first) }
     var waterfallRate by rememberSaveable { mutableIntStateOf(8) }
     var viewCenter by rememberSaveable { mutableLongStateOf(0L) }  // 0: band centre
     var bandWidthPx by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
 
     // Android 17 blocks sockets to the local network (the board) until the
     // user grants "Local network".
@@ -161,175 +174,490 @@ private fun MainScreen(c: NbConnection) {
     val status = c.status
     val hello = c.hello
     val connected = c.link == NbConnection.Link.CONNECTED
-    LaunchedEffect(connected) { if (connected) c.setNr(prefs.getInt("nr", 0)) }
     val minHz = hello?.minFreqHz ?: Qo100.DOWNLINK_LOW_HZ
     val maxHz = hello?.maxFreqHz ?: Qo100.DOWNLINK_HIGH_HZ
 
     fun tuneTo(hz: Long) {
         dial = hz.coerceIn(minHz, maxHz)
-        dialText = java.math.BigDecimal.valueOf(dial).movePointLeft(6).stripTrailingZeros().toPlainString().replace('.', ',')
         c.tune(dial)
     }
+    fun setRit(hz: Int) {
+        rit = hz
+        c.setRit(hz)
+    }
 
-    // On (re)connection, nbd keeps its own frequency: push ours.
+    // Transmit side settings that live across both tabs.
+    var arduino by rememberSaveable { mutableStateOf(prefs.getBoolean("arduino", true)) }
+    c.arduinoPresent = arduino
+    var muteTx by rememberSaveable { mutableStateOf(prefs.getBoolean("mute_rx_tx", false)) }
+    LaunchedEffect(muteTx) { c.muteRxOnTx = muteTx }
+    var tune by remember { mutableStateOf(false) }
+    var calibrating by remember { mutableStateOf(false) }
+    var calibMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(c.txCal) { c.txCal?.let { prefs.edit().putInt("tx_cal", it.hz).apply() } }
+
+    // On (re)connection, nbd keeps its own settings: push ours.
     LaunchedEffect(connected, hello) {
         if (connected && hello != null) {
             c.setPrefillPackets(bufferPackets)
+            c.setNr(prefs.getInt("nr", 0))
             tuneTo(dial)
+            c.setRit(rit)
+            if (hello.tx) {
+                c.setTxCal(prefs.getInt("tx_cal", 0))
+                c.setMicGain(prefs.getInt("mic_gain_db", 0))
+                c.setCompressor(prefs.getBoolean("comp", false))
+                c.setTxEq(prefs.getInt("eq_bass", 0), prefs.getInt("eq_treble", 0))
+            }
         }
     }
 
+    // One-button TX calibration: tune carrier on the air, measure it, stop.
+    LaunchedEffect(calibrating) {
+        if (!calibrating) return@LaunchedEffect
+        val before = c.txCal
+        calibMessage = "Calibration : émission de la porteuse…"
+        tune = true
+        c.setTune(true)
+        if (c.ptt == NbConnection.Ptt.OFF) c.pttOn()
+        val result = withTimeoutOrNull(20_000) {
+            snapshotFlow { c.ptt == NbConnection.Ptt.ON && c.tx?.tune == true }.first { it }
+            delay(1500)
+            calibMessage = "Calibration : mesure…"
+            c.calibrateTx()
+            snapshotFlow { c.txCal }.first { it != null && it !== before }
+        }
+        c.pttOff()
+        tune = false
+        c.setTune(false)
+        calibMessage = if (result == null) "Calibration échouée : porteuse non reçue (voir le gain TX et la balise)." else null
+        calibrating = false
+    }
+
+    // Band view follows the receive passband when it nears an edge.
+    val filterLow = status?.filterLowHz ?: 200
+    val filterHigh = status?.filterHighHz ?: 2800
+    LaunchedEffect(dial, rit, span, filterLow, filterHigh, hello) {
+        val centre = hello?.centerHz ?: return@LaunchedEffect
+        val mid = dial + rit + (filterLow + filterHigh) / 2
+        viewCenter = when {
+            span >= spans[0].first -> centre
+            viewCenter == 0L || kotlin.math.abs(mid - viewCenter) > span * 0.3 -> mid
+            else -> viewCenter
+        }
+    }
+    LaunchedEffect(connected, hello, span, viewCenter, waterfallRate, bandWidthPx) {
+        delay(120)  // a pinch changes the span every frame: send once it settles
+        // Bins follow the screen width (one per pixel, 1024 at most, to spare 4G data).
+        if (connected && hello != null && hello.spectrumSource != "off" && (bandWidthPx > 0 || waterfallRate == 0)) {
+            val bins = if (bandWidthPx > 0) bandWidthPx.coerceIn(128, 1024) else 768
+            c.setSpectrum(viewCenter, span, bins, waterfallRate.toDouble())
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (tab == 0) {
+                HomeTab(
+                    c = c, dial = dial, step = step, rit = rit, span = span, viewCenter = viewCenter,
+                    waterfallRate = waterfallRate, filterLow = filterLow, filterHigh = filterHigh,
+                    permissionError = permissionError,
+                    onListen = { listen() }, onTune = { tuneTo(it) }, onStep = { step = it }, onRit = { setRit(it) },
+                    onSpan = { span = it }, onBandWidth = { bandWidthPx = it },
+                )
+            } else {
+                SettingsTab(
+                    c = c, prefs = prefs, host = host, port = port,
+                    onHost = { host = it }, onPort = { port = it }, onListen = { listen() },
+                    permissionError = permissionError,
+                    waterfallRate = waterfallRate, onWaterfallRate = { waterfallRate = it },
+                    bufferPackets = bufferPackets, onBuffer = {
+                        bufferPackets = it
+                        c.setPrefillPackets(it)
+                    },
+                    tune = tune, onTune = {
+                        tune = it
+                        c.setTune(it)
+                    },
+                    muteTx = muteTx, onMuteTx = {
+                        muteTx = it
+                        prefs.edit().putBoolean("mute_rx_tx", it).apply()
+                    },
+                    arduino = arduino, onArduino = {
+                        arduino = it
+                        prefs.edit().putBoolean("arduino", it).apply()
+                    },
+                    calibrating = calibrating, calibMessage = calibMessage,
+                    onCalibrate = { calibrating = true },
+                    canCalibrate = connected && c.mqttUp && Qo100.isTransmitAllowed(Qo100.uplinkFor(dial)),
+                )
+            }
+        }
+        NavigationBar(windowInsets = WindowInsets(0)) {
+            NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("📡") }, label = { Text("Accueil") })
+            NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("⚙") }, label = { Text("Réglages") })
+        }
+    }
+}
+
+@Composable
+private fun HomeTab(
+    c: NbConnection, dial: Long, step: Long, rit: Int, span: Int, viewCenter: Long, waterfallRate: Int,
+    filterLow: Int, filterHigh: Int, permissionError: String?,
+    onListen: () -> Unit, onTune: (Long) -> Unit, onStep: (Long) -> Unit, onRit: (Int) -> Unit,
+    onSpan: (Int) -> Unit, onBandWidth: (Int) -> Unit,
+) {
+    val status = c.status
+    val hello = c.hello
+    val connected = c.link == NbConnection.Link.CONNECTED
+    var goTo by remember { mutableStateOf(false) }
     Column(
-        modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("QO-100 NB", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            Text("QO-100 NB", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            BeaconBadge(status)
             LinkBadge(c.link)
         }
+        if (c.link == NbConnection.Link.DISCONNECTED) {
+            Button(onClick = onListen, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
+        }
+        val problem = when {
+            permissionError != null -> permissionError
+            c.link != NbConnection.Link.DISCONNECTED && !c.mqttUp -> "MQTT de la carte injoignable (port 1883)"
+            c.link != NbConnection.Link.DISCONNECTED && c.boardMode == "datv" -> "Réception DATV en cours : la bande étroite reprendra à son arrêt."
+            else -> c.lastError
+        }
+        problem?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
 
+        // Band: spectrum and waterfall; tap or drag to tune, pinch to zoom.
+        if (hello != null && hello.spectrumSource != "off" && waterfallRate > 0) {
+            BandView(
+                waterfall = c.waterfall, version = c.waterfallVersion, dialHz = dial,
+                filterLowHz = filterLow, filterHighHz = filterHigh, ritHz = rit, onTune = onTune,
+                onZoom = { f -> onSpan(kotlin.math.round(span / f).toInt().coerceIn(MIN_SPAN_HZ, spans[0].first)) },
+                viewLeftHz = (if (viewCenter != 0L) viewCenter else hello.centerHz) - span / 2,
+                viewSpanHz = span,
+                modifier = Modifier.weight(1f).heightIn(min = 120.dp).onSizeChanged { onBandWidth(it.width) },
+            )
+            ChipRow(if (spans.any { it.first == span }) "Vue" else "Vue ${formatSpan(span)}", spans, spans.firstOrNull { it.first == span }, { it.second }) { onSpan(it.first) }
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+
+        // Frequency: − / + by the step, tap the figure to type one.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            OutlinedButton(onClick = { onTune(dial - step) }) { Text("−") }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f).clickable { goTo = true },
+            ) {
+                Text(Qo100.formatMHz(dial), fontFamily = FontFamily.Monospace, fontSize = 28.sp, maxLines = 1)
+                val up = Qo100.uplinkFor(dial)
+                Text(
+                    "TX " + Qo100.formatMHz(up) + if (Qo100.isTransmitAllowed(up)) "" else " (hors zone)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            OutlinedButton(onClick = { onTune(dial + step) }) { Text("+") }
+        }
+        ChipRow("Pas", steps, step, { if (it >= 1000) "${it / 1000} kHz" else "$it Hz" }, onStep)
+
+        // RIT: listen beside the dial, the uplink stays put.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                String.format(Locale.FRANCE, "RIT %+d", rit), modifier = Modifier.width(72.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (rit != 0) Color(0xFFFFD54F) else MaterialTheme.colorScheme.onSurface,
+            )
+            Slider(
+                value = rit.toFloat(), valueRange = ritRange,
+                onValueChange = { onRit((Math.round(it / 10f) * 10)) },
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { onRit(0) }, enabled = rit != 0) { Text("0") }
+        }
+        SMeter(status?.signalDb)
+
+        if (hello?.tx == true) TxControls(c, dial, connected)
+    }
+    if (goTo) GoToDialog(dial, onDismiss = { goTo = false }, onGo = {
+        onTune(it)
+        goTo = false
+    })
+}
+
+@Composable
+private fun GoToDialog(dial: Long, onDismiss: () -> Unit, onGo: (Long) -> Unit) {
+    var text by remember {
+        mutableStateOf(java.math.BigDecimal.valueOf(dial).movePointLeft(6).stripTrailingZeros().toPlainString().replace('.', ','))
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Aller à") },
+        text = {
+            OutlinedTextField(
+                value = text, onValueChange = { text = it }, label = { Text("Fréquence (MHz)") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+        },
+        confirmButton = { TextButton(onClick = { Qo100.parseMHz(text)?.let(onGo) }) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } },
+    )
+}
+
+/** PTT and RF gain: the transmit controls used during a QSO. */
+@Composable
+private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
+    val context = LocalContext.current
+    var gain by remember { mutableFloatStateOf(-30f) }
+    var gainTouched by remember { mutableStateOf(false) }
+    var micError by remember { mutableStateOf<String?>(null) }
+    // Follow the board's gain until the user moves the slider.
+    LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
+    val allowed = Qo100.isTransmitAllowed(Qo100.uplinkFor(dial))
+    val active = c.ptt != NbConnection.Ptt.OFF
+    val micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        micError = if (granted) null else "Micro refusé : autorise le micro pour QO-100 NB dans les réglages."
+    }
+    Button(
+        onClick = {
+            when {
+                active -> c.pttOff()
+                !micGranted -> micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                else -> c.pttOn()
+            }
+        },
+        enabled = active || (connected && c.mqttUp && allowed),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) Color(0xFFC62828) else Color(0xFF2E7D32),
+            contentColor = Color.White,
+        ),
+        modifier = Modifier.fillMaxWidth().height(56.dp),
+    ) {
+        Text(
+            when (c.ptt) {
+                NbConnection.Ptt.OFF -> "PTT"
+                NbConnection.Ptt.STARTING -> "PTT… (annuler)"
+                NbConnection.Ptt.ON -> if (c.tx?.tune == true) "PORTEUSE · couper" else "EN ÉMISSION · couper"
+                NbConnection.Ptt.STOPPING -> "Arrêt…"
+            },
+            fontSize = 18.sp,
+        )
+    }
+    val line = when {
+        micError != null -> micError
+        !allowed -> "Fréquence hors de la zone d'émission"
+        c.pttMessage.isNotEmpty() -> c.pttMessage
+        else -> null
+    }
+    line?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+            color = if (c.ptt == NbConnection.Ptt.OFF) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(String.format(Locale.FRANCE, "Gain TX %.0f dB", gain), modifier = Modifier.width(104.dp),
+            style = MaterialTheme.typography.bodySmall)
+        Slider(
+            value = gain, valueRange = -50f..0f, steps = 49,
+            onValueChange = {
+                gain = Math.round(it).toFloat()
+                gainTouched = true
+            },
+            onValueChangeFinished = { c.setTxGain(gain.toInt()) },
+            enabled = c.mqttUp && c.callsign != null,
+        )
+    }
+}
+
+@Composable
+private fun SettingsTab(
+    c: NbConnection, prefs: android.content.SharedPreferences,
+    host: String, port: String, onHost: (String) -> Unit, onPort: (String) -> Unit, onListen: () -> Unit,
+    permissionError: String?,
+    waterfallRate: Int, onWaterfallRate: (Int) -> Unit, bufferPackets: Int, onBuffer: (Int) -> Unit,
+    tune: Boolean, onTune: (Boolean) -> Unit, muteTx: Boolean, onMuteTx: (Boolean) -> Unit,
+    arduino: Boolean, onArduino: (Boolean) -> Unit,
+    calibrating: Boolean, calibMessage: String?, onCalibrate: () -> Unit, canCalibrate: Boolean,
+) {
+    val status = c.status
+    val hello = c.hello
+    val connected = c.link == NbConnection.Link.CONNECTED
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Section("Connexion")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
-                value = host, onValueChange = { host = it.trim() }, label = { Text("Carte") },
+                value = host, onValueChange = { onHost(it.trim()) }, label = { Text("Carte") },
                 singleLine = true, modifier = Modifier.weight(1f),
             )
             OutlinedTextField(
-                value = port, onValueChange = { port = it.filter(Char::isDigit) }, label = { Text("Port") },
+                value = port, onValueChange = { onPort(it.filter(Char::isDigit)) }, label = { Text("Port") },
                 singleLine = true, modifier = Modifier.width(96.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
         }
         if (c.link == NbConnection.Link.DISCONNECTED) {
-            Button(onClick = { listen() }, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
+            Button(onClick = onListen, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
         } else {
             OutlinedButton(onClick = { c.disconnect() }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
         }
-        // Board mode: NB (nbd, this app) or DATV (zynqrx, started from the Dashboard)
-        if (c.link != NbConnection.Link.DISCONNECTED) {
-            when {
-                !c.mqttUp -> Text(
-                    "MQTT de la carte injoignable (port 1883) : la carte ne peut pas être passée en NB",
-                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+        permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+
+        if (hello?.tx == true) {
+            Section("Émission")
+            var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain_db", 0).toFloat()) }
+            var eqBass by rememberSaveable { mutableStateOf(prefs.getInt("eq_bass", 0).toFloat()) }
+            var eqTreble by rememberSaveable { mutableStateOf(prefs.getInt("eq_treble", 0).toFloat()) }
+            var comp by rememberSaveable { mutableStateOf(prefs.getBoolean("comp", false)) }
+            DbSlider("Micro", micGain, -10f..30f, connected) {
+                micGain = it
+                prefs.edit().putInt("mic_gain_db", it.toInt()).apply()
+                c.setMicGain(it.toInt())
+            }
+            DbSlider("Graves", eqBass, -12f..12f, connected) {
+                eqBass = it
+                prefs.edit().putInt("eq_bass", it.toInt()).apply()
+                c.setTxEq(it.toInt(), eqTreble.toInt())
+            }
+            DbSlider("Aigus", eqTreble, -12f..12f, connected) {
+                eqTreble = it
+                prefs.edit().putInt("eq_treble", it.toInt()).apply()
+                c.setTxEq(eqBass.toInt(), it.toInt())
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = comp, onClick = {
+                    comp = !comp
+                    prefs.edit().putBoolean("comp", comp).apply()
+                    c.setCompressor(comp)
+                }, label = { Text("Compresseur") })
+                FilterChip(selected = tune, onClick = { onTune(!tune) }, label = { Text("Porteuse 1 kHz") })
+                FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet en TX") })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("PTT par l'Arduino", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Switch(checked = arduino, enabled = c.ptt == NbConnection.Ptt.OFF, onCheckedChange = onArduino)
+            }
+
+            Section("Correction TX")
+            var calText by rememberSaveable { mutableStateOf(prefs.getInt("tx_cal", 0).toString()) }
+            LaunchedEffect(c.txCal) { c.txCal?.let { calText = it.hz.toString() } }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = calText, onValueChange = { calText = it.filter { ch -> ch.isDigit() || ch == '-' } },
+                    label = { Text("Correction (Hz)") }, singleLine = true, modifier = Modifier.weight(1f),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
-                c.boardMode == "datv" -> Text(
-                    "Réception DATV en cours (Webtioune) : la bande étroite reprendra à son arrêt.",
+                Button(onClick = {
+                    calText.toIntOrNull()?.coerceIn(-50000, 50000)?.let {
+                        prefs.edit().putInt("tx_cal", it).apply()
+                        c.setTxCal(it)
+                    }
+                }) { Text("OK") }
+            }
+            val micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            Button(
+                onClick = onCalibrate, enabled = !calibrating && canCalibrate && micGranted,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (calibrating) "Calibration en cours…" else "Calibrer (émet la porteuse quelques secondes)") }
+            calibMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            c.txCal?.let {
+                Text(
+                    String.format(Locale.FRANCE, "Dernière mesure : porteuse reçue à %+.0f Hz, correction %+d Hz", it.measuredHz, it.hz),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            val tx = c.tx
+            val board = buildList {
+                c.callsign?.let { add(it) }
+                c.txMuted?.let { add(if (it) "RF coupée" else "RF active") }
+                c.arduinoPtt?.let { add("Arduino PTT " + if (it) "on" else "off") }
+                c.paTempC?.let { add(String.format(Locale.FRANCE, "PA %.1f °C", it)) }
+            }
+            if (board.isNotEmpty()) Text(board.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
+            if (tx != null && tx.state == "on") {
+                Text(
+                    String.format(
+                        Locale.FRANCE, "Niveau micro %.0f dB • ALC %.1f dB • sortie %.1f dB • %.0f s",
+                        tx.micDb, tx.alcDb, tx.outDb, tx.onS,
+                    ) + if (tx.underruns > 0) " • trous ${tx.underruns}" else "",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
-        permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        c.lastError?.takeIf { c.boardMode != "datv" }?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 
-        // Band: spectrum and waterfall, tap or drag to tune
-        val filterLow = status?.filterLowHz ?: 200
-        val filterHigh = status?.filterHighHz ?: 2800
-        // Zoomed views follow the dial when the passband nears an edge.
-        LaunchedEffect(dial, span, filterLow, filterHigh, hello) {
-            val centre = hello?.centerHz ?: return@LaunchedEffect
-            val mid = dial + (filterLow + filterHigh) / 2
-            viewCenter = when {
-                span >= spans[0].first -> centre
-                viewCenter == 0L || kotlin.math.abs(mid - viewCenter) > span * 0.3 -> mid
-                else -> viewCenter
-            }
+        Section("Réception")
+        ChipRow("Filtre", filters, filters.firstOrNull { it.low == status?.filterLowHz && it.high == status?.filterHighHz }, { it.label }) {
+            c.setFilter(it.low, it.high)
         }
-        LaunchedEffect(connected, hello, span, viewCenter, waterfallRate, bandWidthPx) {
-            kotlinx.coroutines.delay(120)  // a pinch changes the span every frame: send once it settles
-            // Bins follow the screen width (one per pixel, 1024 at most, to spare 4G data).
-            if (connected && hello != null && hello.spectrumSource != "off" && (bandWidthPx > 0 || waterfallRate == 0)) {
-                val bins = if (bandWidthPx > 0) bandWidthPx.coerceIn(128, 1024) else 768
-                c.setSpectrum(viewCenter, span, bins, waterfallRate.toDouble())
-            }
+        ChipRow("AGC", agcModes, agcModes.firstOrNull { it.second == status?.agc }, { it.first }) { c.setAgc(it.second) }
+        ChipRow("Bruit", nrModes, nrModes.firstOrNull { it.second == status?.nr }, { it.first }) {
+            prefs.edit().putInt("nr", it.second).apply()
+            c.setNr(it.second)
         }
-        if (hello != null && hello.spectrumSource != "off" && waterfallRate > 0) {
-            BandView(
-                waterfall = c.waterfall, version = c.waterfallVersion, dialHz = dial,
-                filterLowHz = filterLow, filterHighHz = filterHigh, onTune = { tuneTo(it) },
-                onZoom = { f -> span = kotlin.math.round(span / f).toInt().coerceIn(MIN_SPAN_HZ, spans[0].first) },
-                viewLeftHz = (if (viewCenter != 0L) viewCenter else hello.centerHz) - span / 2,
-                viewSpanHz = span,
-                modifier = Modifier.onSizeChanged { bandWidthPx = it.width },
-            )
-        }
-        ChipRow(if (spans.any { it.first == span }) "Vue" else "Vue ${formatSpan(span)}", spans, spans.firstOrNull { it.first == span }, { it.second }) { span = it.first }
+        ChipRow("Chute", waterfallRates, waterfallRate, { if (it == 0) "Off" else "$it/s" }, onWaterfallRate)
+        ChipRow("Débit", bitrates, status?.bitrate, { "${it / 1000}k" }) { c.setBitrate(it) }
+        ChipRow("Tampon", buffers, bufferPackets, { "${it * 20} ms" }, onBuffer)
 
-        // Frequency
-        Text(
-            Qo100.formatMHz(dial),
-            fontFamily = FontFamily.Monospace, fontSize = 34.sp,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-        Text(
-            "Émission " + Qo100.formatMHz(Qo100.uplinkFor(dial)) +
-                if (Qo100.isTransmitAllowed(Qo100.uplinkFor(dial))) "" else "  (hors zone d'émission)",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = { tuneTo(dial - step) }, modifier = Modifier.weight(1f)) { Text("−") }
-            OutlinedButton(onClick = { tuneTo(dial + step) }, modifier = Modifier.weight(1f)) { Text("+") }
-        }
-        ChipRow("Pas", steps, step, { if (it >= 1000) "${it / 1000} kHz" else "$it Hz" }) { step = it }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = dialText, onValueChange = { dialText = it }, label = { Text("Aller à (MHz)") },
-                singleLine = true, modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            )
-            Button(onClick = { Qo100.parseMHz(dialText)?.let { tuneTo(it) } }) { Text("OK") }
-        }
-
-        // Transmit (nbd started with --tx)
-        if (hello?.tx == true) TxPanel(c, dial, connected)
-
-        // Beacon lock and signal
+        Section("État")
         BeaconPanel(status)
-        SMeter(status?.signalDb)
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Volume", modifier = Modifier.width(72.dp))
-            Slider(value = volume, onValueChange = {
-                volume = it
-                c.setVolume(it)
-            })
-        }
-
-        var advanced by rememberSaveable { mutableStateOf(false) }
-        TextButton(onClick = { advanced = !advanced }) {
-            Text(if (advanced) "Réglages avancés ▾" else "Réglages avancés ▸")
-        }
-        if (advanced) {
-            ChipRow("Chute", waterfallRates, waterfallRate, { if (it == 0) "Off" else "$it/s" }) { waterfallRate = it }
-            ChipRow("Filtre", filters, filters.firstOrNull { it.low == status?.filterLowHz && it.high == status?.filterHighHz }, { it.label }) {
-                c.setFilter(it.low, it.high)
-            }
-            ChipRow("AGC", agcModes, agcModes.firstOrNull { it.second == status?.agc }, { it.first }) { c.setAgc(it.second) }
-            ChipRow("Bruit", nrModes, nrModes.firstOrNull { it.second == status?.nr }, { it.first }) {
-                prefs.edit().putInt("nr", it.second).apply()
-                c.setNr(it.second)
-            }
-            ChipRow("Débit", bitrates, status?.bitrate, { "${it / 1000}k" }) { c.setBitrate(it) }
-            ChipRow("Tampon", buffers, bufferPackets, { "${it * 20} ms" }) {
-                bufferPackets = it
-                c.setPrefillPackets(it)
-            }
-            val s = c.stats
+        val s = c.stats
+        Text(
+            String.format(
+                Locale.FRANCE, "Audio %.1f kbit/s • tampon %d ms • perdus %d • jetés %d • coupures %d",
+                s.kbps, s.bufferMs, s.lost, s.discarded, s.underruns,
+            ) + if (s.waterfallKbps > 0) String.format(Locale.FRANCE, " • chute %.0f kbit/s", s.waterfallKbps) else "",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        hello?.let {
             Text(
-                String.format(
-                    Locale.FRANCE, "Audio %.1f kbit/s • tampon %d ms • perdus %d • jetés %d • coupures %d",
-                    s.kbps, s.bufferMs, s.lost, s.discarded, s.underruns,
-                ) + if (s.waterfallKbps > 0) String.format(Locale.FRANCE, " • chute %.0f kbit/s", s.waterfallKbps) else "",
+                "nbd ${it.source} • chute ${it.spectrumSource} • ${Qo100.formatMHz(it.minFreqHz)} – ${Qo100.formatMHz(it.maxFreqHz)}" +
+                    (status?.let { st -> " • ${st.clients} client(s)" } ?: ""),
                 style = MaterialTheme.typography.bodySmall,
             )
-            hello?.let {
-                Text(
-                    "nbd ${it.source} • chute ${it.spectrumSource} • ${Qo100.formatMHz(it.minFreqHz)} – ${Qo100.formatMHz(it.maxFreqHz)}" +
-                        (status?.let { st -> " • ${st.clients} client(s)" } ?: ""),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         }
     }
+}
+
+@Composable
+private fun Section(title: String) {
+    Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 6.dp))
+}
+
+/** Slider in whole dB; onDone runs when the finger lifts. */
+@Composable
+private fun DbSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, enabled: Boolean, onDone: (Float) -> Unit) {
+    var v by remember(value) { mutableFloatStateOf(value) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(String.format(Locale.FRANCE, "%s %+.0f dB", label, v), modifier = Modifier.width(112.dp),
+            style = MaterialTheme.typography.bodySmall)
+        Slider(
+            value = v, valueRange = range, steps = (range.endInclusive - range.start).toInt() - 1,
+            onValueChange = { v = Math.round(it).toFloat() },
+            onValueChangeFinished = { onDone(v) },
+            enabled = enabled,
+        )
+    }
+}
+
+@Composable
+private fun BeaconBadge(status: NbProtocol.Status?) {
+    val (text, color) = when (status?.beacon) {
+        NbProtocol.BeaconState.LOCKED -> "balise ✓" to Color(0xFF2E7D32)
+        NbProtocol.BeaconState.HOLDOVER -> "balise ~" to Color(0xFFF9A825)
+        NbProtocol.BeaconState.SEARCHING -> "balise ?" to Color(0xFFC62828)
+        else -> return
+    }
+    Text(
+        text, color = Color.White, style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(color).padding(horizontal = 8.dp, vertical = 4.dp),
+    )
 }
 
 @Composable
@@ -392,214 +720,5 @@ private fun <T> ChipRow(title: String, items: List<T>, selected: T?, label: (T) 
         items.forEach { item ->
             FilterChip(selected = item == selected, onClick = { onPick(item) }, label = { Text(label(item)) })
         }
-    }
-}
-
-@Composable
-private fun TxPanel(c: NbConnection, dial: Long, connected: Boolean) {
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
-    var arduino by rememberSaveable { mutableStateOf(prefs.getBoolean("arduino", true)) }
-    var calText by rememberSaveable { mutableStateOf(prefs.getInt("tx_cal", 0).toString()) }
-    var gain by remember { mutableFloatStateOf(-30f) }
-    var gainTouched by remember { mutableStateOf(false) }
-    var tune by remember { mutableStateOf(false) }
-    var micError by remember { mutableStateOf<String?>(null) }
-    c.arduinoPresent = arduino
-    // Follow the board's gain until the user moves the slider.
-    LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
-    // nbd forgets the correction when it restarts: send it on each connection.
-    var muteTx by rememberSaveable { mutableStateOf(prefs.getBoolean("mute_rx_tx", false)) }
-    LaunchedEffect(muteTx) { c.muteRxOnTx = muteTx }
-    LaunchedEffect(c.txCal) {
-        c.txCal?.let {
-            prefs.edit().putInt("tx_cal", it.hz).apply()
-            calText = it.hz.toString()
-        }
-    }
-    var comp by rememberSaveable { mutableStateOf(prefs.getBoolean("comp", false)) }
-    var eqBass by rememberSaveable { mutableStateOf(prefs.getInt("eq_bass", 0).toFloat()) }
-    var eqTreble by rememberSaveable { mutableStateOf(prefs.getInt("eq_treble", 0).toFloat()) }
-    var micGain by rememberSaveable { mutableStateOf(prefs.getInt("mic_gain_db", 0).toFloat()) }
-    LaunchedEffect(connected) {
-        if (connected) {
-            c.setTxCal(prefs.getInt("tx_cal", 0))
-            c.setMicGain(prefs.getInt("mic_gain_db", 0))
-            c.setCompressor(prefs.getBoolean("comp", false))
-            c.setTxEq(prefs.getInt("eq_bass", 0), prefs.getInt("eq_treble", 0))
-        }
-    }
-
-    val uplink = Qo100.uplinkFor(dial)
-    val allowed = Qo100.isTransmitAllowed(uplink)
-    val active = c.ptt != NbConnection.Ptt.OFF
-    val micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        micError = if (granted) null else "Micro refusé : autorise le micro pour QO-100 NB dans les réglages."
-    }
-
-    Column(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-            .background(if (c.ptt == NbConnection.Ptt.ON) Color(0x55C62828) else Color(0xFF1E1E1E)).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Émission", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            Text(Qo100.formatMHz(uplink), fontFamily = FontFamily.Monospace)
-        }
-        Button(
-            onClick = {
-                when {
-                    active -> c.pttOff()
-                    !micGranted -> micLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    else -> c.pttOn()
-                }
-            },
-            enabled = active || (connected && c.mqttUp && allowed),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (active) Color(0xFFC62828) else Color(0xFF2E7D32),
-                contentColor = Color.White,
-            ),
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-        ) {
-            Text(
-                when (c.ptt) {
-                    NbConnection.Ptt.OFF -> "PTT"
-                    NbConnection.Ptt.STARTING -> "PTT… (annuler)"
-                    NbConnection.Ptt.ON -> "EN ÉMISSION · couper"
-                    NbConnection.Ptt.STOPPING -> "Arrêt…"
-                },
-                fontSize = 18.sp,
-            )
-        }
-        val line = when {
-            !allowed -> "Fréquence hors de la zone d'émission (balises et bords du transpondeur)"
-            c.pttMessage.isNotEmpty() -> c.pttMessage
-            else -> "Prêt"
-        }
-        Text(line, style = MaterialTheme.typography.bodySmall,
-            color = if (c.ptt == NbConnection.Ptt.OFF && c.pttMessage.isNotEmpty()) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurface)
-        micError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(String.format(Locale.FRANCE, "Gain %.0f dB", gain), modifier = Modifier.width(96.dp),
-                style = MaterialTheme.typography.bodySmall)
-            Slider(
-                value = gain, valueRange = -50f..0f, steps = 49,
-                onValueChange = {
-                    gain = Math.round(it).toFloat()
-                    gainTouched = true
-                },
-                onValueChangeFinished = { c.setTxGain(gain.toInt()) },
-                enabled = c.mqttUp && c.callsign != null,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(String.format(Locale.FRANCE, "Micro %+.0f dB", micGain), modifier = Modifier.width(96.dp),
-                style = MaterialTheme.typography.bodySmall)
-            Slider(
-                value = micGain, valueRange = -10f..30f, steps = 39,
-                onValueChange = { micGain = Math.round(it).toFloat() },
-                onValueChangeFinished = {
-                    prefs.edit().putInt("mic_gain_db", micGain.toInt()).apply()
-                    c.setMicGain(micGain.toInt())
-                },
-                enabled = connected,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(String.format(Locale.FRANCE, "Graves %+.0f dB", eqBass), modifier = Modifier.width(96.dp),
-                style = MaterialTheme.typography.bodySmall)
-            Slider(
-                value = eqBass, valueRange = -12f..12f, steps = 23,
-                onValueChange = { eqBass = Math.round(it).toFloat() },
-                onValueChangeFinished = {
-                    prefs.edit().putInt("eq_bass", eqBass.toInt()).apply()
-                    c.setTxEq(eqBass.toInt(), eqTreble.toInt())
-                },
-                enabled = connected,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(String.format(Locale.FRANCE, "Aigus %+.0f dB", eqTreble), modifier = Modifier.width(96.dp),
-                style = MaterialTheme.typography.bodySmall)
-            Slider(
-                value = eqTreble, valueRange = -12f..12f, steps = 23,
-                onValueChange = { eqTreble = Math.round(it).toFloat() },
-                onValueChangeFinished = {
-                    prefs.edit().putInt("eq_treble", eqTreble.toInt()).apply()
-                    c.setTxEq(eqBass.toInt(), eqTreble.toInt())
-                },
-                enabled = connected,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = tune, onClick = {
-                tune = !tune
-                c.setTune(tune)
-            }, label = { Text("Porteuse 1 kHz") })
-            FilterChip(selected = comp, onClick = {
-                comp = !comp
-                prefs.edit().putBoolean("comp", comp).apply()
-                c.setCompressor(comp)
-            }, label = { Text("Compresseur") })
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = muteTx, onClick = {
-                muteTx = !muteTx
-                prefs.edit().putBoolean("mute_rx_tx", muteTx).apply()
-            }, label = { Text("Muet en TX") })
-            Text("Arduino", style = MaterialTheme.typography.bodySmall)
-            Switch(checked = arduino, enabled = !active, onCheckedChange = {
-                arduino = it
-                prefs.edit().putBoolean("arduino", it).apply()
-            })
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = calText, onValueChange = { calText = it.filter { ch -> ch.isDigit() || ch == '-' } },
-                label = { Text("Correction TX (Hz)") }, singleLine = true, modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            )
-            Button(onClick = {
-                calText.toIntOrNull()?.coerceIn(-50000, 50000)?.let {
-                    prefs.edit().putInt("tx_cal", it).apply()
-                    c.setTxCal(it)
-                }
-            }) { Text("OK") }
-            Button(
-                onClick = { c.calibrateTx() },
-                enabled = c.ptt == NbConnection.Ptt.ON && c.tx?.tune == true,
-            ) { Text("Calibrer") }
-        }
-        c.txCal?.let {
-            Text(
-                String.format(Locale.FRANCE, "Calibré : porteuse reçue à %+.0f Hz, correction %+d Hz", it.measuredHz, it.hz),
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        val tx = c.tx
-        val board = buildList {
-            c.callsign?.let { add(it) }
-            c.txMuted?.let { add(if (it) "RF coupée" else "RF active") }
-            c.arduinoPtt?.let { add("Arduino PTT " + if (it) "on" else "off") }
-            c.paTempC?.let { add(String.format(Locale.FRANCE, "PA %.1f °C", it)) }
-        }
-        if (board.isNotEmpty()) Text(board.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
-        if (tx != null && tx.state == "on") {
-            Text(
-                String.format(
-                    Locale.FRANCE, "Niveau micro %.0f dB • ALC %.1f dB • sortie %.1f dB • %.0f s",
-                    tx.micDb, tx.alcDb, tx.outDb, tx.onS,
-                ) + if (tx.underruns > 0) " • trous ${tx.underruns}" else "",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        Text(
-            "Full duplex : avec le haut-parleur, ta propre voix revient du satellite dans le micro. Casque conseillé.",
-            style = MaterialTheme.typography.bodySmall, color = Color(0xFF9E9E9E),
-        )
     }
 }

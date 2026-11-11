@@ -328,6 +328,8 @@ int main(int argc, char** argv) {
     nb::WdspRx rx(0, use_frontend ? 48000 : static_cast<int>(o.rate),
                   use_frontend ? block / static_cast<int>(fe_decim) : block, o.dsp_size);
     std::vector<nb::cf> narrow;
+    double dial_hz = o.freq_hz;  // USB dial; the uplink follows it
+    double rit_hz = 0;           // receive offset from the dial
     double station_offset = o.freq_hz - o.center_hz;
     double filter_low = 200.0, filter_high = 2800.0;
     int agc = 3;
@@ -428,7 +430,10 @@ int main(int argc, char** argv) {
             switch (c.type) {
             case nb::Command::Freq:
                 if (c.a < min_freq || c.a > max_freq) error = "freq outside the received band";
-                else station_offset = c.a - o.center_hz;
+                else {
+                    dial_hz = c.a;
+                    station_offset = std::clamp(dial_hz + rit_hz, min_freq, max_freq) - o.center_hz;
+                }
                 if (tx && error.empty()) tx->set_dial(c.a);
                 calib.cancel();
                 break;
@@ -436,6 +441,11 @@ int main(int argc, char** argv) {
                 filter_low = c.a;
                 filter_high = c.b;
                 rx.set_usb(filter_low, filter_high);
+                break;
+            case nb::Command::Rit:
+                rit_hz = c.a;
+                station_offset = std::clamp(dial_hz + rit_hz, min_freq, max_freq) - o.center_hz;
+                calib.cancel();
                 break;
             case nb::Command::TxEq:
                 if (!tx) error = "this nbd has no transmitter (--tx)";
@@ -485,7 +495,7 @@ int main(int argc, char** argv) {
                 }
                 const nb::TxStatus st = tx->status();
                 if (st.state != "on" || !st.tune) error = "TX calibration: turn the tune carrier on and transmit first";
-                else calib.start(tune_hz, st.cal_hz);
+                else calib.start(tune_hz - rit_hz, st.cal_hz);  // with RIT the carrier sits lower
                 break;
             }
             case nb::Command::TxCal:

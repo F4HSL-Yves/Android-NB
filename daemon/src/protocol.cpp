@@ -69,6 +69,11 @@ Command parse_command(const std::string& json, std::string& error) {
             if (c.a < -20 || c.a > 30) error = "micgain: db -20..30";
             else c.type = Command::MicGain;
         }
+    } else if (cmd == "rit") {
+        if (num("hz", c.a)) {
+            if (c.a < -10000 || c.a > 10000) error = "rit: hz -10000..10000";
+            else c.type = Command::Rit;
+        }
     } else if (cmd == "txeq") {
         if (num("bass", c.a) && num("treble", c.b)) {
             if (c.a < -12 || c.a > 12 || c.b < -12 || c.b > 12) error = "txeq: bass, treble -12..12";

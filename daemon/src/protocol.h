@@ -12,6 +12,8 @@
 //
 // App -> server (text, one JSON object per message)
 //   {"cmd":"freq","hz":10489900000}         USB dial frequency (downlink)
+//   {"cmd":"rit","hz":0}                    receive offset from the dial, -10000..10000 Hz
+//                                           (the uplink stays on the dial)
 //   {"cmd":"filter","low":200,"high":2800}  audio passband, Hz
 //   {"cmd":"agc","mode":3}                  0 off, 1 long, 2 slow, 3 medium, 4 fast
 //   {"cmd":"nr","mode":2}                   noise reduction: 0 off, 1 ANR, 2 EMNR
@@ -50,7 +52,7 @@ constexpr uint8_t kSpectrumLine = 0x02;
 constexpr uint8_t kMicOpus = 0x03;
 
 struct Command {
-    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp, TxCalAuto, Nr, TxEq } type = None;
+    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp, TxCalAuto, Nr, TxEq, Rit } type = None;
     double a = 0.0, b = 0.0, c = 0.0, d = 0.0;
 };
 
