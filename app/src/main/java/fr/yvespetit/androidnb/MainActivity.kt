@@ -66,6 +66,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -295,9 +296,9 @@ private fun MainScreen(c: NbConnection) {
         }
         NavigationBar(windowInsets = WindowInsets(0)) {
             NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("📡") }, label = { Text("Accueil") })
-            NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("🎧") }, label = { Text("Réception") })
+            NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("🎧") }, label = { Text("Réglages\nréception", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, lineHeight = 13.sp) })
             if (hello?.tx == true || tab == 2) {
-                NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🎙") }, label = { Text("Émission") })
+                NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🎙") }, label = { Text("Réglages\némission", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, lineHeight = 13.sp) })
             }
         }
     }
@@ -425,6 +426,31 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, muteTx: 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         micError = if (granted) null else "Micro refusé : autorise le micro pour QO-100 NB dans les réglages."
     }
+    val line = when {
+        micError != null -> micError
+        !allowed -> "Fréquence hors de la zone d'émission"
+        c.pttMessage.isNotEmpty() -> c.pttMessage
+        else -> null
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet en TX") })
+        Text(line ?: "", style = MaterialTheme.typography.bodySmall, maxLines = 2, modifier = Modifier.weight(1f),
+            color = if (c.ptt == NbConnection.Ptt.OFF) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(String.format(Locale.FRANCE, "Gain TX %.0f dB", gain), modifier = Modifier.width(104.dp),
+            style = MaterialTheme.typography.bodySmall)
+        Slider(
+            value = gain, valueRange = -50f..0f, steps = 49,
+            onValueChange = {
+                gain = Math.round(it).toFloat()
+                gainTouched = true
+            },
+            onValueChangeFinished = { c.setTxGain(gain.toInt()) },
+            enabled = c.mqttUp && c.callsign != null,
+        )
+    }
+    // PTT last: right above the tab bar, under the thumb.
     Button(
         onClick = {
             when {
@@ -448,30 +474,6 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, muteTx: 
                 NbConnection.Ptt.STOPPING -> "Arrêt…"
             },
             fontSize = 18.sp,
-        )
-    }
-    val line = when {
-        micError != null -> micError
-        !allowed -> "Fréquence hors de la zone d'émission"
-        c.pttMessage.isNotEmpty() -> c.pttMessage
-        else -> null
-    }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet en TX") })
-        Text(line ?: "", style = MaterialTheme.typography.bodySmall, maxLines = 2, modifier = Modifier.weight(1f),
-            color = if (c.ptt == NbConnection.Ptt.OFF) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(String.format(Locale.FRANCE, "Gain TX %.0f dB", gain), modifier = Modifier.width(104.dp),
-            style = MaterialTheme.typography.bodySmall)
-        Slider(
-            value = gain, valueRange = -50f..0f, steps = 49,
-            onValueChange = {
-                gain = Math.round(it).toFloat()
-                gainTouched = true
-            },
-            onValueChangeFinished = { c.setTxGain(gain.toInt()) },
-            enabled = c.mqttUp && c.callsign != null,
         )
     }
 }
