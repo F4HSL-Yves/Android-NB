@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -332,9 +333,6 @@ private fun HomeTab(
             BeaconBadge(status)
             LinkBadge(c.link)
         }
-        if (c.link == NbConnection.Link.DISCONNECTED) {
-            Button(onClick = onListen, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
-        }
         val problem = when {
             permissionError != null -> permissionError
             c.link != NbConnection.Link.DISCONNECTED && !c.mqttUp -> "MQTT de la carte injoignable (port 1883)"
@@ -399,7 +397,15 @@ private fun HomeTab(
             }
             for (slot in 1..3) MemoryChip(slot, dial, onTune, modifier = Modifier.weight(1f))
         }
-        if (hello?.tx == true) TxControls(c, dial, connected)
+        // Bottom row, under the thumb: START / STOP beside the PTT.
+        val startStop: @Composable RowScope.() -> Unit = {
+            StartStopButton(c, onListen, Modifier.weight(1f))
+        }
+        if (hello?.tx == true) {
+            TxControls(c, dial, connected, startStop)
+        } else {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { startStop() }
+        }
     }
     if (goTo) GoToDialog(dial, onDismiss = { goTo = false }, onGo = {
         onTune(it)
@@ -458,7 +464,7 @@ private fun GoToDialog(dial: Long, onDismiss: () -> Unit, onGo: (Long) -> Unit) 
 
 /** PTT and RF gain: the transmit controls used during a QSO. */
 @Composable
-private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
+private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startStop: @Composable RowScope.() -> Unit) {
     val context = LocalContext.current
     var gain by remember { mutableFloatStateOf(-30f) }
     var gainTouched by remember { mutableStateOf(false) }
@@ -494,7 +500,9 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
             enabled = c.mqttUp && c.callsign != null,
         )
     }
-    // PTT last: right above the tab bar, under the thumb.
+    // PTT last: right above the tab bar, under the thumb, beside START / STOP.
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    startStop()
     Button(
         onClick = {
             when {
@@ -508,17 +516,40 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean) {
             containerColor = if (active) Color(0xFFC62828) else Color(0xFF2E7D32),
             contentColor = Color.White,
         ),
-        modifier = Modifier.fillMaxWidth().height(56.dp),
+        modifier = Modifier.weight(2f).height(56.dp),
     ) {
         Text(
             when (c.ptt) {
                 NbConnection.Ptt.OFF -> "PTT"
-                NbConnection.Ptt.STARTING -> "PTT… (annuler)"
-                NbConnection.Ptt.ON -> if (c.tx?.tune == true) "PORTEUSE · couper" else "EN ÉMISSION · couper"
+                NbConnection.Ptt.STARTING -> "PTT…"
+                NbConnection.Ptt.ON -> if (c.tx?.tune == true) "PORTEUSE" else "ÉMISSION"
                 NbConnection.Ptt.STOPPING -> "Arrêt…"
             },
-            fontSize = 18.sp,
+            fontSize = 18.sp, maxLines = 1,
         )
+    }
+    }
+}
+
+/**
+ * START / STOP: START asks the board for nb mode and connects; while nbd
+ * starts it reads "Ça démarre…" (a tap cancels); once connected, STOP
+ * disconnects and gives the board's radio back (SDR Console can use it).
+ */
+@Composable
+private fun StartStopButton(c: NbConnection, onStart: () -> Unit, modifier: Modifier = Modifier) {
+    val stop = { c.disconnect(releaseBoard = true) }
+    when (c.link) {
+        NbConnection.Link.DISCONNECTED -> Button(
+            onClick = onStart, modifier = modifier.height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0), contentColor = Color.White),
+        ) { Text("START", fontSize = 18.sp, maxLines = 1) }
+        NbConnection.Link.CONNECTING -> OutlinedButton(onClick = stop, modifier = modifier.height(56.dp)) {
+            Text("Ça démarre…", maxLines = 1, softWrap = false, fontSize = 14.sp)
+        }
+        NbConnection.Link.CONNECTED -> OutlinedButton(onClick = stop, modifier = modifier.height(56.dp)) {
+            Text("STOP", fontSize = 18.sp, maxLines = 1)
+        }
     }
 }
 
@@ -554,15 +585,10 @@ private fun SettingsTab(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
         }
-        if (c.link == NbConnection.Link.DISCONNECTED) {
-            Button(onClick = onListen, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
-        } else {
-            OutlinedButton(onClick = { c.disconnect(releaseBoard = true) }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
-            Text(
-                "Arrêter rend la radio de la carte : SDR Console peut alors s'en servir.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        Text(
+            "START / STOP est sur l'accueil. STOP rend la radio de la carte : SDR Console peut alors s'en servir.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         BoardInstallSection(host)
       }
