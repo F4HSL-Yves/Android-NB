@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing) connection.disconnect()
+        if (isFinishing) connection.disconnect(releaseBoard = true)
         super.onDestroy()
     }
 }
@@ -557,7 +557,11 @@ private fun SettingsTab(
         if (c.link == NbConnection.Link.DISCONNECTED) {
             Button(onClick = onListen, modifier = Modifier.fillMaxWidth()) { Text("Écouter") }
         } else {
-            OutlinedButton(onClick = { c.disconnect() }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
+            OutlinedButton(onClick = { c.disconnect(releaseBoard = true) }, modifier = Modifier.fillMaxWidth()) { Text("Arrêter") }
+            Text(
+                "Arrêter rend la radio de la carte : SDR Console peut alors s'en servir.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         BoardInstallSection(host)

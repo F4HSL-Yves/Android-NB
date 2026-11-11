@@ -119,7 +119,14 @@ class NbConnection {
         worker = Thread({ loop("ws://$host:$port/") }, "nb-ws").apply { start() }
     }
 
-    fun disconnect() {
+    /**
+     * Stops listening. With [releaseBoard], the board's radio is also given
+     * back (nbd stopped through nbctl's datv mode, zynqrx left idle) so
+     * another program such as SDR Console can use it; the next [connect]
+     * asks for nb mode again. Skipped when another client is still on nbd.
+     */
+    fun disconnect(releaseBoard: Boolean = false) {
+        val release = releaseBoard && boardMode == "nb" && (status?.clients ?: 0) <= 1
         pttOff()
         pttThread?.join(3000)
         pttThread = null
@@ -130,6 +137,7 @@ class NbConnection {
             mqtt?.let { m -> runCatching { m.publish("cmd/pluto/$call/tx/stream/mode", restore) } }
             savedStreamMode = null
         }
+        if (release) mqtt?.let { m -> runCatching { m.publish("cmd/nb/mode", "datv") } }
         wanted = false
         socket?.close()
         mqtt?.close()
