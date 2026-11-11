@@ -64,7 +64,7 @@ jobs:
       # The runner image ships the Android SDK (ANDROID_HOME) with licences
       # accepted; the Android Gradle plugin fetches the platform it needs.
       - name: Unit tests and debug APK
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease
       - uses: actions/upload-artifact@v4
         with:
           name: android-nb-debug-apk

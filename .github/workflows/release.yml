@@ -1,0 +1,62 @@
+name: Release
+
+# Push a tag v0.2 (for example) on the commit to publish: this builds nbd for
+# the board and the signed APK, and publishes them as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install the armhf cross toolchain, FFTW3 and Opus
+        run: |
+          sudo dpkg --add-architecture armhf
+          sudo sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          printf 'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main universe\ndeb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe\n' |
+            sudo tee /etc/apt/sources.list.d/armhf.list
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libfftw3-dev:armhf libopus-dev:armhf
+      - name: Build nbd for the board
+        run: |
+          cmake -S daemon -B build-arm -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armhf.cmake -DNBD_BUILD_TESTS=OFF
+          cmake --build build-arm -j"$(nproc)" --target nbd
+          arm-linux-gnueabihf-strip build-arm/nbd
+      - name: Board package (nb/ folder for the SD card)
+        run: |
+          mkdir -p dist/nb
+          cp build-arm/nbd board/nbctl.sh board/nb.conf board/install.sh dist/nb/
+          (cd dist && zip -r "qo100-nb-carte-${GITHUB_REF_NAME}.zip" nb)
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Signed APK
+        env:
+          NB_KEYSTORE_B64: ${{ secrets.NB_KEYSTORE_B64 }}
+          NB_KEYSTORE_PASSWORD: ${{ secrets.NB_KEYSTORE_PASSWORD }}
+          NB_KEY_ALIAS: ${{ secrets.NB_KEY_ALIAS }}
+          NB_KEY_PASSWORD: ${{ secrets.NB_KEY_PASSWORD }}
+        run: |
+          if [ -n "$NB_KEYSTORE_B64" ]; then
+            echo "$NB_KEYSTORE_B64" | base64 -d >"$RUNNER_TEMP/release.jks"
+            export NB_KEYSTORE="$RUNNER_TEMP/release.jks"
+          else
+            echo "::warning::no NB_KEYSTORE_B64 secret: the APK is signed with the debug key"
+          fi
+          export NB_VERSION_NAME="${GITHUB_REF_NAME#v}" NB_VERSION_CODE="$GITHUB_RUN_NUMBER"
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "dist/qo100-nb-${GITHUB_REF_NAME}.apk"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "QO-100 NB $GITHUB_REF_NAME" --notes-file docs/release-notes.md \
+            "dist/qo100-nb-carte-${GITHUB_REF_NAME}.zip" "dist/qo100-nb-${GITHUB_REF_NAME}.apk"

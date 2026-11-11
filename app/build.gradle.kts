@@ -11,8 +11,9 @@ android {
         applicationId = "fr.yvespetit.androidnb"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1"
+        // The release workflow passes the tag (v0.2 -> 0.2) and its run number.
+        versionCode = System.getenv("NB_VERSION_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("NB_VERSION_NAME") ?: "0.1"
     }
 
     // Fixed debug key, committed on purpose (it protects nothing): every CI
@@ -23,6 +24,24 @@ android {
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
+        }
+        // Release key from the CI secrets (see README, « Distribuer »). Without
+        // them a release build falls back to the debug key above.
+        val releaseStore = System.getenv("NB_KEYSTORE")
+        if (releaseStore != null && file(releaseStore).exists()) {
+            create("release") {
+                storeFile = file(releaseStore)
+                storePassword = System.getenv("NB_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("NB_KEY_ALIAS")
+                keyPassword = System.getenv("NB_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

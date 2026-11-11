@@ -113,7 +113,32 @@ fichier rejoué, `nbd` calcule le spectre lui-même (`--spectrum local`).
 python3 daemon/tools/nbws_probe.py ws://192.168.2.1:8073 --spectrum 768000,768,8
 ```
 
+## Installer (utilisateurs)
+
+Chaque version publiée (onglet « Releases » du dépôt) contient le dossier
+`nb/` pour la carte SD, avec `install.sh`, et l'APK signé. La marche à suivre
+est dans [docs/release-notes.md](docs/release-notes.md), recopiée sur la
+page de chaque version.
+
+## Distribuer une nouvelle version
+
+Pousser un tag `v0.2` (par exemple) sur le commit à publier : le workflow
+`release.yml` compile `nbd` pour la carte et l'APK release, puis crée la
+release GitHub. L'APK est signé avec la clé fournie dans les secrets du
+dépôt :
+- `NB_KEYSTORE_B64` : le keystore, en base64 ;
+- `NB_KEYSTORE_PASSWORD` ;
+- `NB_KEY_ALIAS` ;
+- `NB_KEY_PASSWORD`.
+
+Sans ces secrets, il retombe sur la clé de debug. La clé de release ne
+change jamais : un APK signé avec une autre clé ne peut pas mettre à jour
+l'appli déjà installée.
+
 ## Installation durable sur la carte (Tezuka)
+
+Le plus simple : `sh /boot/nb/install.sh` une fois le dossier `nb/` copié
+(voir ci-dessus). À la main :
 
 La racine de la carte est en RAM et la jffs2 est presque pleine : `nbd` et
 ses réglages vont sur la carte SD (`/boot/nb/`), et seul un petit
