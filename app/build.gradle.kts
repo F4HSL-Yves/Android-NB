@@ -52,7 +52,8 @@ android {
     // Board files for the in-app installer (assets/board/): the scripts from
     // board/, and nbd from build-arm/ when it was built (CI and releases);
     // without it the installer button explains that this APK has no nbd.
-    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/boardAssets"))
+    // A plain File: AGP 9 refuses a Provider here (the Copy task below runs before preBuild).
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.get().dir("generated/boardAssets").asFile)
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
