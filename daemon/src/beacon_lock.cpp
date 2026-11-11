@@ -122,6 +122,18 @@ void BeaconLock::run_acquisition() {
     acq_snr_db_ = 10.0 * std::log10(best_p / median);
     if (acq_snr_db_ < cfg_.acquisition_snr_db) return;  // keep searching
 
+    // IQ imbalance mirrors the beacon to the other side of the stream
+    // centre: at x Hz from the expected position it sits at -2*offset - x,
+    // and in this (possibly squared) spectrum at -2*mult*offset - k*bin.
+    // When that is in the window, the peak must clearly beat it.
+    const long mirror = std::lround((-2.0 * mult * cfg_.beacon_offset_hz) / bin_hz) - best;
+    if (std::abs(mirror - best) > 2 && std::abs(mirror) + 1 < half) {
+        double mirror_p = 0.0;
+        for (long k = mirror - 1; k <= mirror + 1; ++k) mirror_p = std::max(mirror_p, power[static_cast<size_t>(k + half)]);
+        const double margin_db = mult * cfg_.image_margin_db;
+        if (10.0 * std::log10(best_p / std::max(mirror_p, 1e-30)) < margin_db) return;  // ambiguous: wait
+    }
+
     // Parabolic interpolation on log power for sub-bin precision.
     double delta = 0.0;
     const long i = best + half;
