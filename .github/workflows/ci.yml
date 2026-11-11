@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  daemon-host:
+    name: Daemon (host build and tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install FFTW3 and Opus
+        run: sudo apt-get update && sudo apt-get install -y libfftw3-dev libopus-dev
+      - name: Build
+        run: |
+          cmake -S daemon -B build-host
+          cmake --build build-host -j"$(nproc)"
+      - name: Test
+        run: ctest --test-dir build-host --output-on-failure
+
+  daemon-zynq:
+    name: Daemon (static ARM binary for the Zynq)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install the armhf cross toolchain and FFTW3
+        run: |
+          sudo dpkg --add-architecture armhf
+          # Keep the default mirrors amd64-only and fetch armhf from ports.
+          sudo sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          printf 'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main universe\ndeb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe\n' |
+            sudo tee /etc/apt/sources.list.d/armhf.list
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libfftw3-dev:armhf libopus-dev:armhf
+      - name: Build
+        run: |
+          cmake -S daemon -B build-arm -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armhf.cmake -DNBD_BUILD_TESTS=OFF
+          cmake --build build-arm -j"$(nproc)"
+          arm-linux-gnueabihf-strip build-arm/nbd build-arm/nbsynth build-arm/nbbench
+          file build-arm/nbd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nbd-zynq-armhf
+          path: |
+            build-arm/nbd
+            build-arm/nbsynth
+            build-arm/nbbench
+
+  android:
+    name: Android app
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      # The runner image ships the Android SDK (ANDROID_HOME) with licences
+      # accepted; the Android Gradle plugin fetches the platform it needs.
+      - name: Unit tests and debug APK
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-nb-debug-apk
+          path: app/build/outputs/apk/debug/*.apk

@@ -1,0 +1,3 @@
+[submodule "daemon/third_party/wdsp"]
+	path = daemon/third_party/wdsp
+	url = https://github.com/jimahlstrom/wdsp
