@@ -87,6 +87,16 @@ void PlutoTx::open() {
     mute();
     const auto& tx = find_channel(phy_, "voltage0", true);
     const auto& lo = find_channel(phy_, "altvoltage1", true);
+    // Undo what another program (SDR Console) may have left on the TX
+    // path: a FIR designed for its own rate, and a narrow analog filter.
+    // Our signal lies 0.5 to 1 MHz above the LO; either one attenuates it.
+    // The FIR is not needed at 3.072 MS/s (the half-band chain does it).
+    try {
+        if (iiod_.read_channel_attr(phy_, tx, "filter_fir_en") != "0")
+            iiod_.write_channel_attr(phy_, tx, "filter_fir_en", "0");
+    } catch (const IiodError&) {
+    }
+    iiod_.write_channel_attr(phy_, tx, "rf_bandwidth", std::to_string(cfg_.rf_bandwidth));
     rate_ = std::atof(iiod_.read_channel_attr(phy_, tx, "sampling_frequency").c_str());
     if (std::fabs(rate_ - cfg_.expected_rate) > cfg_.expected_rate * 1e-3)
         throw IiodError("the AD9363 runs at " + std::to_string(static_cast<long>(rate_)) +

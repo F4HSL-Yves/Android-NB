@@ -50,6 +50,10 @@ struct PlutoTxConfig {
     int iiod_port = 30431;
     double lo_hz = 2399500000.0;   // below the NB uplink (2400.000 - 2400.500 MHz)
     double expected_rate = 3072000.0;
+    // Analog TX bandwidth: the signal sits 0.5 to 1 MHz above the LO, so
+    // another program's narrow setting (SDR Console leaves 1.152 MHz, about
+    // +-576 kHz) would cut it. 18 MHz is the board's device-tree default.
+    long rf_bandwidth = 18000000;
     size_t buffer_samples = 32768;  // ~10.7 ms per DMA block
     int kernel_buffers = 4;
     // Direct /dev/iio write when iiod is local and the device node exists.
