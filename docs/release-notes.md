@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.6
+
+- **L'émission marche après SDR Console** : SDR Console laisse une bande d'émission étroite (1,15 MHz) et un filtre FIR sur la carte, qui atténuaient fortement le signal. nbd remet la bande à 18 MHz et coupe ce filtre à chaque émission. Il n'est plus nécessaire de redémarrer la carte.
+
 ## Nouveautés de la v1.5
 
 - **STOP libère toujours la radio**, même pendant « Ça démarre… » ou quand la liaison MQTT se reconnecte. Avant, SDR Console pouvait se retrouver à partager la radio avec la bande étroite (son haché, spectre décalé).
