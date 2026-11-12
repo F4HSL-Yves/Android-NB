@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.8
+
+- **Émission normale dès le premier START après SDR Console** : SDR Console laisse ses filtres FIR et des horloges calculées pour eux. nbd coupait le filtre d'émission au PTT sans recalculer les horloges, et le signal sortait très faible jusqu'au START suivant. nbd coupe maintenant les filtres avant de régler les horloges, dès son démarrage.
+
 ## Nouveautés de la v1.7
 
 - **Le gain TX choisi dans l'appli est retenu** et remis sur la carte à chaque START et à chaque PTT. SDR Console laissait la carte à -40 dB, et il fallait plusieurs START/STOP pour retrouver le niveau.
