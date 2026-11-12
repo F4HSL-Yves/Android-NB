@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.10
+
+- **Émission possible sous Android 8 et 9** : ces versions n'ont pas d'encodeur Opus, et le PTT affichait « Micro : Failed to initialize audio/opus ». L'appli embarque maintenant son propre encodeur pour ces téléphones. À partir d'Android 10, rien ne change.
+
 ## Nouveautés de la v1.9
 
 - **Installation sur la carte réparée pour Android 8 à 12** : le bouton « Installer / mettre à jour » échouait avec l'erreur « No virtual method toString(Ljava/nio/charset/Charset;) ». L'appli utilisait une fonction qui n'existe que depuis Android 13.
