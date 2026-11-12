@@ -245,7 +245,8 @@ int main() {
     }
     {
         // LNB +34 kHz off (seen on a board): the BPSK search (60 kHz in
-        // nbd) still finds the centre beacon, despite its image at -34 kHz.
+        // nbd, swept in three 25 kHz windows) still finds the centre beacon,
+        // despite its image at -34 kHz and their product at the centre.
         Scenario sc;
         sc.bpsk = true;
         sc.keyed = false;
@@ -259,7 +260,7 @@ int main() {
         const Result r = run(sc);
         report("BPSK beacon, LNB +34 kHz", r);
         CHECK(!r.wrong_lock, "wrong lock");
-        CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
+        CHECK(r.lock_time > 0 && r.lock_time < 4.5, "lock time %.2f", r.lock_time);
         CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
     }
     {
