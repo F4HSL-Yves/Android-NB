@@ -40,6 +40,7 @@ struct Scenario {
     double image_amp = 0.0;            // IQ imbalance: mirror of the beacon (conjugate)
     double image_until = 1e9;          // ...present until then (IQ correction settling)
     double dc_guard = 300.0;           // BeaconLockConfig::dc_guard_hz
+    double search = 0.0;               // search half width, 0: config default
 };
 
 struct Result {
@@ -72,6 +73,7 @@ Result run(const Scenario& sc) {
     cfg.beacon_offset_hz = sc.beacon_offset;
     cfg.bpsk = sc.bpsk;
     cfg.dc_guard_hz = sc.dc_guard;
+    if (sc.search > 0) cfg.search_half_width_hz = sc.search;
     nb::BeaconLock lock(cfg);
     std::uniform_int_distribution<int> bit(0, 1);
     double symbol = 1.0;
@@ -240,6 +242,39 @@ int main() {
         CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
         CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
         CHECK(r.final_state == nb::LockState::Locked, "final state");
+    }
+    {
+        // LNB +34 kHz off (seen on a board): the BPSK search (60 kHz in
+        // nbd) still finds the centre beacon, despite its image at -34 kHz.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 0.0;
+        sc.lnb_error0 = 34000.0;
+        sc.drift = 0.5;
+        sc.interferer_offset = 0.0;
+        sc.image_amp = 0.1;
+        sc.dc_guard = 0.0;
+        sc.search = 60000.0;
+        const Result r = run(sc);
+        report("BPSK beacon, LNB +34 kHz", r);
+        CHECK(!r.wrong_lock, "wrong lock");
+        CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+    }
+    {
+        // Same LNB with the CW beacon (25 kHz search): the beacon is out of
+        // the window and a carrier sits against its edge. Searching is
+        // right; locking on the carrier 24 kHz off is not.
+        Scenario sc;
+        sc.lnb_error0 = 34000.0;
+        sc.drift = 0.0;
+        sc.interferer_offset = 24400.0 - 34000.0;
+        sc.interferer_amp = 1.0;
+        sc.seconds = 20.0;
+        const Result r = run(sc);
+        report("CW beacon out of reach, edge carrier", r);
+        CHECK(!r.wrong_lock, "locked on the edge carrier");
     }
     {
         // Just after start the AD9363's IQ correction has not settled: the

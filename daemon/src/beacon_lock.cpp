@@ -121,6 +121,11 @@ void BeaconLock::run_acquisition() {
     const double median = std::max(sorted[sorted.size() / 2], 1e-30);
     acq_snr_db_ = 10.0 * std::log10(best_p / median);
     if (acq_snr_db_ < cfg_.acquisition_snr_db) return;  // keep searching
+    // A peak against the window edge is most likely something else (a
+    // station, the filter skirt) while the beacon lies outside: keep
+    // searching rather than lock 25 kHz off.
+    const long edge = static_cast<long>(std::ceil(mult * 1000.0 / bin_hz));
+    if (std::abs(best) >= half - edge) return;
 
     // IQ imbalance mirrors the beacon to the other side of the stream
     // centre: at x Hz from the expected position it sits at -2*offset - x,

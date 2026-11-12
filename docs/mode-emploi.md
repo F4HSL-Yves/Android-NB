@@ -332,6 +332,7 @@ avant lui au relâchement.
 | L'installation refuse la clé ssh | La carte a été réinstallée : « Oublier la clé », puis installer. Si la carte n'a pas changé, ne pas le faire, et vérifier qu'on parle bien à la bonne carte. |
 | « Réception DATV en cours » | Un logiciel DATV utilise la carte. La bande étroite reprend à son arrêt. |
 | « balise ? » qui reste rouge | Vérifier le pointage et le LNB. Avec un LNB dont l'OL n'est pas à 9750 MHz, ajouter `--lnb-lo` dans `nb.conf`. |
+| Balise « ? » ou stations décalées avec la balise basse ou haute | La carte cherche ces balises à ±25 kHz seulement. Si le LNB est décalé de plus de 25 kHz, choisir la balise PSK (cherchée à ±60 kHz) en touchant le badge balise. |
 | PTT grisé | Pas connecté, MQTT injoignable, ou fréquence hors zone d'émission (voir la ligne « TX … »). |
 | « PTT non confirmé par l'Arduino » | L'option « PTT par l'Arduino » est activée sans Arduino, ou il ne répond pas. La désactiver s'il n'y en a pas. |
 | « Micro refusé » | Autoriser le micro pour QO-100 NB dans les réglages Android. |

@@ -58,7 +58,7 @@ struct Options {
     double center_hz = 10489750000.0;  // downlink frequency at the stream centre
     double freq_hz = 10489900000.0;    // station to demodulate (USB dial)
     double beacon_hz = 10489500000.0;  // CW beacon
-    double search_hz = 25000.0;
+    double search_hz = 0.0;  // 0: 25 kHz for a CW beacon, 60 kHz for the BPSK one
     bool beacon_psk = false;
     std::string wisdom_dir;
     bool quiet = false;
@@ -116,7 +116,7 @@ void usage() {
                  "  --center HZ      downlink frequency at the stream centre (default 10489750000)\n"
                  "  --freq HZ        USB dial frequency to demodulate (default 10489900000)\n"
                  "  --beacon HZ      CW beacon frequency (default 10489500000)\n"
-                 "  --search HZ      beacon search half width (default 25000)\n"
+                 "  --search HZ      beacon search half width (default 25000 CW, 60000 BPSK)\n"
                  "  --beacon-psk     the beacon is BPSK (automatic for 10489750000)\n"
                  "  --output FILE    48 kHz mono s16le audio, '-' for stdout\n"
                  "  --wisdom DIR     cache FFTW plans in DIR (recommended on the board)\n"
@@ -313,9 +313,13 @@ int main(int argc, char** argv) {
     nb::BeaconLockConfig cfg;
     cfg.sample_rate = o.rate;
     cfg.beacon_offset_hz = o.beacon_hz - o.center_hz;
-    cfg.search_half_width_hz = o.search_hz;
+    // The squared BPSK line stands out from SSB stations, so its search can
+    // be wide enough for LNBs far off (+34 kHz seen); a wide CW search
+    // would take in CW stations.
+    auto search_for = [&](bool bpsk) { return o.search_hz > 0 ? o.search_hz : bpsk ? 60000.0 : 25000.0; };
     // The centre beacon is BPSK (no carrier): lock on its square.
     cfg.bpsk = o.beacon_psk || std::abs(o.beacon_hz - 10489750000.0) < 1000.0;
+    cfg.search_half_width_hz = search_for(cfg.bpsk);
     // Live from the board, the AD9363 LO (and its leakage) is lo_offset
     // away from the stream centre: no carrier to keep out there.
     if (live && std::abs(o.pluto.lo_offset_hz) > o.rate / 2) cfg.dc_guard_hz = 0.0;
@@ -469,6 +473,7 @@ int main(int argc, char** argv) {
                 nb::BeaconLockConfig bc = cfg;
                 bc.beacon_offset_hz = c.a - o.center_hz;
                 bc.bpsk = std::abs(c.a - 10489750000.0) < 1000.0;
+                bc.search_half_width_hz = search_for(bc.bpsk);
                 if (std::abs(bc.beacon_offset_hz) + bc.search_half_width_hz > o.rate / 2) {
                     error = "beacon: outside the IQ bandwidth";
                     break;
