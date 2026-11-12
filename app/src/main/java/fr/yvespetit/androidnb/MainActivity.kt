@@ -238,6 +238,8 @@ private fun MainScreen(c: NbConnection) {
     // Transmit side settings that live across both tabs.
     var arduino by rememberSaveable { mutableStateOf(prefs.getBoolean("arduino", false)) }
     c.arduinoPresent = arduino
+    // TX gain chosen in the app, put back on the board at START and at each PTT.
+    LaunchedEffect(Unit) { if (prefs.contains("tx_gain_db")) c.wantedTxGainDb = prefs.getInt("tx_gain_db", -10) }
     var muteTx by rememberSaveable { mutableStateOf(prefs.getBoolean("mute_rx_tx", false)) }
     LaunchedEffect(muteTx) { c.muteRxOnTx = muteTx }
     var tune by remember { mutableStateOf(false) }
@@ -534,10 +536,15 @@ private fun GoToDialog(dial: Long, onDismiss: () -> Unit, onGo: (Long) -> Unit) 
 @Composable
 private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startStop: @Composable RowScope.() -> Unit) {
     val context = LocalContext.current
-    var gain by remember { mutableFloatStateOf(-30f) }
-    var gainTouched by remember { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE) }
+    // The gain chosen here is saved and enforced on the board (at START and
+    // at each PTT): SDR Console, for one, leaves its own (-40 dB). Until one
+    // is chosen, the slider follows the board's.
+    val saved = remember { if (prefs.contains("tx_gain_db")) prefs.getInt("tx_gain_db", -10) else null }
+    var gain by remember { mutableFloatStateOf(saved?.toFloat() ?: -30f) }
+    var gainTouched by remember { mutableStateOf(saved != null) }
     var micError by remember { mutableStateOf<String?>(null) }
-    // Follow the board's gain until the user moves the slider.
+    LaunchedEffect(Unit) { saved?.let { c.wantedTxGainDb = it } }
     LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
     val allowed = Qo100.isTransmitAllowed(Qo100.uplinkFor(dial))
     val active = c.ptt != NbConnection.Ptt.OFF
@@ -567,7 +574,10 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startSto
                 gain = Math.round(it).toFloat()
                 gainTouched = true
             },
-            onValueChangeFinished = { c.setTxGain(gain.toInt()) },
+            onValueChangeFinished = {
+                prefs.edit().putInt("tx_gain_db", gain.toInt()).apply()
+                c.setTxGain(gain.toInt())
+            },
             enabled = c.mqttUp && c.callsign != null,
         )
     }
