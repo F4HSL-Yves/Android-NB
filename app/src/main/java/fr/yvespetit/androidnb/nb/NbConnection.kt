@@ -102,6 +102,7 @@ class NbConnection {
     private var player: OpusPlayer? = null
     private var volume = 1f
     @Volatile private var mqtt: MqttLite? = null
+    @Volatile private var lastHost: String? = null
     private var mqttWorker: Thread? = null
 
     /**
@@ -113,6 +114,7 @@ class NbConnection {
      */
     fun connect(host: String, port: Int) {
         disconnect()
+        lastHost = host
         wanted = true
         lastError = null
         mqttWorker = Thread({ mqttLoop(host, requestNb = true) }, "nb-mqtt").apply { start() }
@@ -127,7 +129,11 @@ class NbConnection {
      * connection the board still believes open cannot keep the radio.
      */
     fun disconnect(releaseBoard: Boolean = false) {
-        val release = releaseBoard && boardMode == "nb"
+        // Sent unless the board is known to be in DATV already: while START
+        // is still connecting boardMode is not known yet, and a STOP pressed
+        // then must free the radio all the same ("datv" twice is harmless).
+        val release = releaseBoard && boardMode != "datv"
+        val releaseHost = lastHost
         pttOff()
         pttThread?.join(3000)
         pttThread = null
@@ -145,7 +151,15 @@ class NbConnection {
         Thread {
             if (m != null) {
                 if (restore != null && call != null) runCatching { m.publish("cmd/pluto/$call/tx/stream/mode", restore) }
-                if (release) runCatching { m.publish("cmd/nb/mode", "datv") }
+            }
+            if (release) {
+                // On the open link if there is one, else on a short one: the
+                // broker link may still be connecting or retrying.
+                val sent = m != null && runCatching { m.publish("cmd/nb/mode", "datv") }.isSuccess
+                if (!sent && releaseHost != null) runCatching {
+                    val once = MqttLite.connect(releaseHost, clientId = "android-nb-stop-" + (System.nanoTime() % 100000), timeoutMs = 2000)
+                    try { once.publish("cmd/nb/mode", "datv") } finally { once.close() }
+                }
             }
             mqtt?.close()
         }.apply { start() }.join(3000)

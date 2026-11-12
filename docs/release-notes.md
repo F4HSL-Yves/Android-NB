@@ -2,6 +2,11 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.5
+
+- **STOP libère toujours la radio**, même pendant « Ça démarre… » ou quand la liaison MQTT se reconnecte. Avant, SDR Console pouvait se retrouver à partager la radio avec la bande étroite (son haché, spectre décalé).
+- **La carte se souvient du mode** : après un STOP, elle reste libre pour SDR Console même si elle redémarre. START reprend la bande étroite.
+
 ## Nouveautés de la v1.4
 
 - **Sans Arduino par défaut** : le PTT commande directement la sortie RF de la carte. Avec un Arduino de commutation, activer « PTT par l'Arduino » dans **Réglages émission** (à refaire une fois après la mise à jour si on s'en sert).
@@ -44,7 +49,7 @@ Le firmware de la carte n'est pas modifié. L'application installe elle-même ce
 
 Au premier START, l'appli installe QO-100 NB sur la carte toute seule (le bouton affiche « Installation… » quelques secondes) : elle copie le programme et ses scripts dans `/boot/nb` sur la carte SD par ssh, avec le mot de passe root par défaut de Tezuka (`analog`), puis ajoute le lancement au démarrage. Si ce mot de passe a été changé, le saisir dans **Réglages réception**, « Installer sur la carte », et appuyer une fois sur **Installer / mettre à jour**.
 
-La bande étroite démarre aussitôt, puis à chaque mise sous tension. Un démarrage DATV (Webtioune, Android-DATV) reprend la radio automatiquement, puis la rend à la bande étroite quand il s'arrête. Pour SDR Console, qui ne prévient pas la carte, appuyer d'abord sur **STOP**.
+La bande étroite démarre aussitôt, puis à chaque mise sous tension (sauf après un STOP, voir plus bas). Un démarrage DATV (Webtioune, Android-DATV) reprend la radio automatiquement, puis la rend à la bande étroite quand il s'arrête. Pour SDR Console, qui ne prévient pas la carte, appuyer d'abord sur **STOP**.
 
 4. Pour émettre, dans **Réglages émission** :
    - activer « PTT par l'Arduino » seulement si un Arduino commande le PA (désactivé par défaut) ;

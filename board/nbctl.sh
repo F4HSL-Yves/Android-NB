@@ -8,7 +8,7 @@
 #
 #   nbctl.sh nb | datv     switch now (and remember it for the next boot)
 #   nbctl.sh status        print the current mode
-#   nbctl.sh boot          at boot: start in nb mode (zynqrx idle), then
+#   nbctl.sh boot          at boot: back to the last mode (nb if none), then
 #                          listen to MQTT (run from /mnt/jffs2/autorun.sh)
 #
 # MQTT (broker on the board, 127.0.0.1:1883):
@@ -113,8 +113,12 @@ case "$1" in
 nb | datv) switch "$1" ;;
 status) current ;;
 boot)
-    # S97datv has already started zynqrx, idle: NB takes the radio.
-    if [ "$BOOT_MODE" = datv ]; then switch datv; else switch nb; fi
+    # S97datv has already started zynqrx, idle. The mode left at shutdown
+    # wins (a STOP for SDR Console must survive a reboot; START asks for nb
+    # again), then BOOT_MODE from nb.conf for a fresh install.
+    mode=$(cat "$MODE_FILE" 2>/dev/null)
+    case "$mode" in nb | datv) ;; *) mode=$BOOT_MODE ;; esac
+    if [ "$mode" = datv ]; then switch datv; else switch nb; fi
     # Listen for mode changes and for DATV starts, and come back if
     # mosquitto restarts.
     (
