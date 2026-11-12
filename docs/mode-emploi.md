@@ -123,7 +123,7 @@ Tant que l'appli est au premier plan, l'écran reste allumé.
 
 - **Toucher un signal** dans le spectre ou le waterfall : le filtre se centre
   dessus.
-- **Glisser à l'horizontale** sur le spectre : accorde comme un bouton.
+- **Glisser à l'horizontale** sur le spectre : le curseur de fréquence suit le doigt.
 - **Pincer** : zoome ou dézoome (jusqu'à 3 kHz de large).
 - Boutons **−** et **+** : avancent du pas choisi.
 - **Toucher la fréquence** affichée : ouvre « Aller à », pour saisir une
