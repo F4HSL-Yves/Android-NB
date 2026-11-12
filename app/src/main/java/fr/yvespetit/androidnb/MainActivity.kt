@@ -514,7 +514,10 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startSto
     LaunchedEffect(c.txGainDb) { if (!gainTouched) c.txGainDb?.let { gain = it.toFloat() } }
     val allowed = Qo100.isTransmitAllowed(Qo100.uplinkFor(dial))
     val active = c.ptt != NbConnection.Ptt.OFF
-    val micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    // Checked at each press, not at composition: a value computed then stays
+    // stale after the user grants the microphone, and every press would only
+    // ask Android again (which answers at once, so nothing seemed to happen).
+    fun micGranted() = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         micError = if (granted) null else "Micro refusé : autorise le micro pour QO-100 NB dans les réglages."
     }
@@ -548,7 +551,7 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startSto
         onClick = {
             when {
                 active -> c.pttOff()
-                !micGranted -> micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                !micGranted() -> micLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 else -> c.pttOn()
             }
         },
@@ -691,9 +694,19 @@ private fun SettingsTab(
                     }
                 }) { Text("OK") }
             }
-            val micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            // The microphone is asked for on the press itself (same reason as the PTT).
+            val calMicLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                if (granted) onCalibrate()
+            }
             Button(
-                onClick = onCalibrate, enabled = !calibrating && canCalibrate && micGranted,
+                onClick = {
+                    if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                        onCalibrate()
+                    } else {
+                        calMicLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                },
+                enabled = !calibrating && canCalibrate,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(if (calibrating) "Calibration en cours…" else "Calibrer (émet la porteuse quelques secondes)") }
             calibMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

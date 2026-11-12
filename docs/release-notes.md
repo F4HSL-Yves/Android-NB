@@ -1,5 +1,9 @@
 Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 7020, Pluto) et téléphone Android.
 
+## Nouveautés de la v1.3
+
+- **PTT et calibration dès la première utilisation** : juste après l'installation, une fois le micro autorisé, le PTT ne réagissait pas et « Calibrer » restait grisé pendant une trentaine de secondes.
+
 ## Nouveautés de la v1.2
 
 - **Installation de la carte automatique** : au premier START, l'appli installe QO-100 NB sur la carte toute seule (mot de passe root par défaut de Tezuka), et la met à jour à chaque nouvelle version de l'appli.
