@@ -99,6 +99,7 @@ De haut en bas :
 
 | Zone | Rôle |
 | --- | --- |
+| **?** | À côté du titre : ouvre ce mode d'emploi dans le navigateur. |
 | **Badges** | « balise ✓ » : verrouillée (vert). « balise ~ » : perdue, la dernière correction est gardée (orange). « balise ? » : recherche en cours (rouge). À côté, l'état de la liaison : connecté, connexion… ou arrêté. |
 | **Ligne de message** | Problème en cours, en rouge (MQTT injoignable, réception DATV en cours, erreur d'installation…). |
 | **Spectre et waterfall** | Toute la bande ou un zoom. Le trait rouge marque la fréquence d'écoute, la zone claire la bande passante du filtre. |

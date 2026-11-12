@@ -5,7 +5,7 @@ Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/
 ## Nouveautés de la v1.4
 
 - **Sans Arduino par défaut** : le PTT commande directement la sortie RF de la carte. Avec un Arduino de commutation, activer « PTT par l'Arduino » dans **Réglages émission** (à refaire une fois après la mise à jour si on s'en sert).
-- **Mode d'emploi** complet de l'appli, dans `docs/mode-emploi.md`.
+- **Mode d'emploi** complet de l'appli, ouvert par le bouton **?** à côté du titre de l'accueil.
 
 ## Nouveautés de la v1.3
 

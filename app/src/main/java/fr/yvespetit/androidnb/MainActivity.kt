@@ -14,6 +14,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.AlertDialog
@@ -367,7 +368,9 @@ private fun HomeTab(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("QO-100 NB", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Text("QO-100 NB", style = MaterialTheme.typography.titleMedium)
+            HelpButton()
+            Spacer(modifier = Modifier.weight(1f))
             BeaconBadge(status)
             LinkBadge(c.link)
         }
@@ -453,6 +456,30 @@ private fun HomeTab(
         goTo = false
     })
 }
+
+/** "?" beside the title: opens the user manual in the browser. */
+@Composable
+private fun HelpButton() {
+    val context = LocalContext.current
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(28.dp).clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable {
+                runCatching {
+                    context.startActivity(
+                        android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(MANUAL_URL)),
+                    )
+                }.onFailure {
+                    android.widget.Toast.makeText(context, "Aucun navigateur pour ouvrir le mode d'emploi", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            },
+    ) {
+        Text("?", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+    }
+}
+
+private const val MANUAL_URL = "https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md"
 
 /** Memory slot: tap tunes to it, long press stores the current dial. */
 @OptIn(ExperimentalFoundationApi::class)
