@@ -367,6 +367,7 @@ private fun HomeTab(
 ) {
     val status = c.status
     val hello = c.hello
+    val prefs = LocalContext.current.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
     val connected = c.link == NbConnection.Link.CONNECTED
     var goTo by remember { mutableStateOf(false) }
     Column(
