@@ -16,7 +16,13 @@ Le firmware de la carte n'est pas modifié. L'application installe elle-même ce
 
 ## Installer
 
-1. Télécharger `qo100-nb-….apk` sur le téléphone et l'ouvrir. Android demande d'autoriser l'installation depuis le navigateur ou le gestionnaire de fichiers.
+1. Sur le téléphone, ouvrir ce lien, qui donne toujours la dernière version :
+   **https://github.com/F4HSL-Yves/Android-NB/releases/latest/download/qo100-nb.apk**
+   ou scanner ce QR code :
+
+   ![QR code : télécharger l'APK](https://raw.githubusercontent.com/F4HSL-Yves/Android-NB/main/docs/img/qr-apk.png)
+
+   Si Chrome prévient que le fichier peut être dangereux, choisir « Télécharger quand même ». Ouvrir ensuite le fichier téléchargé. La première fois, Android demande d'autoriser l'installation depuis Chrome : « Paramètres », activer « Autoriser cette source », revenir et toucher « Installer ». Si Play Protect avertit d'une appli inconnue, choisir « Installer quand même ».
 2. Ouvrir l'onglet **Réglages réception** et saisir l'adresse de la carte.
 3. Dans **Installer sur la carte**, saisir le mot de passe root de la carte (`analog` par défaut sur Tezuka), puis appuyer sur **Installer / mettre à jour**.
 

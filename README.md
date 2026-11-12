@@ -119,6 +119,12 @@ python3 daemon/tools/nbws_probe.py ws://192.168.2.1:8073 --spectrum 768000,768,8
 
 ## Installer (utilisateurs)
 
+Sur le téléphone, ouvrir
+**https://github.com/F4HSL-Yves/Android-NB/releases/latest/download/qo100-nb.apk**
+(toujours la dernière version) ou scanner ce QR code :
+
+![QR code : télécharger l'APK](docs/img/qr-apk.png)
+
 Chaque version publiée (onglet « Releases » du dépôt) contient l'APK signé,
 qui embarque `nbd` et ses scripts : le bouton « Installer sur la carte » de
 l'appli les copie par ssh dans `/boot/nb` et ajoute le lancement à

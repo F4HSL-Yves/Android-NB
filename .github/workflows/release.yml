@@ -54,9 +54,12 @@ jobs:
           export NB_VERSION_NAME="${GITHUB_REF_NAME#v}" NB_VERSION_CODE="$GITHUB_RUN_NUMBER"
           ./gradlew --no-daemon assembleRelease
           cp app/build/outputs/apk/release/app-release.apk "dist/qo100-nb-${GITHUB_REF_NAME}.apk"
+          # Same APK under a fixed name: releases/latest/download/qo100-nb.apk
+          # then always gives the latest version (link and QR code in the notes).
+          cp app/build/outputs/apk/release/app-release.apk dist/qo100-nb.apk
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "QO-100 NB $GITHUB_REF_NAME" --notes-file docs/release-notes.md \
-            "dist/qo100-nb-carte-${GITHUB_REF_NAME}.zip" "dist/qo100-nb-${GITHUB_REF_NAME}.apk"
+            "dist/qo100-nb-carte-${GITHUB_REF_NAME}.zip" "dist/qo100-nb-${GITHUB_REF_NAME}.apk" dist/qo100-nb.apk
