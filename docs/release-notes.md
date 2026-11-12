@@ -1,5 +1,12 @@
 Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 7020, Pluto) et téléphone Android.
 
+Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
+
+## Nouveautés de la v1.4
+
+- **Sans Arduino par défaut** : le PTT commande directement la sortie RF de la carte. Avec un Arduino de commutation, activer « PTT par l'Arduino » dans **Réglages émission** (à refaire une fois après la mise à jour si on s'en sert).
+- **Mode d'emploi** complet de l'appli, dans `docs/mode-emploi.md`.
+
 ## Nouveautés de la v1.3
 
 - **PTT et calibration dès la première utilisation** : juste après l'installation, une fois le micro autorisé, le PTT ne réagissait pas et « Calibrer » restait grisé pendant une trentaine de secondes.
@@ -40,7 +47,7 @@ Au premier START, l'appli installe QO-100 NB sur la carte toute seule (le bouton
 La bande étroite démarre aussitôt, puis à chaque mise sous tension. Un démarrage DATV (Webtioune, Android-DATV) reprend la radio automatiquement, puis la rend à la bande étroite quand il s'arrête. Pour SDR Console, qui ne prévient pas la carte, appuyer d'abord sur **STOP**.
 
 4. Pour émettre, dans **Réglages émission** :
-   - indiquer si un Arduino commande le PTT ;
+   - activer « PTT par l'Arduino » seulement si un Arduino commande le PA (désactivé par défaut) ;
    - lancer **Calibrer** une fois pour régler la correction TX (émet une porteuse quelques secondes).
    Le gain TX se règle sur l'accueil.
 

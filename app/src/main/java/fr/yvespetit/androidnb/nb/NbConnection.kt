@@ -61,7 +61,7 @@ class NbConnection {
     var txCal by mutableStateOf<NbProtocol.TxCalMessage?>(null)
         private set
     /** Set by the UI (saved setting): PTT through the Arduino, with its confirmation. */
-    @Volatile var arduinoPresent = true
+    @Volatile var arduinoPresent = false
 
     @Volatile private var vCallsign: String? = null
     @Volatile private var vStreamMode: String? = null

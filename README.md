@@ -119,6 +119,8 @@ python3 daemon/tools/nbws_probe.py ws://192.168.2.1:8073 --spectrum 768000,768,8
 
 ## Installer (utilisateurs)
 
+Le [mode d'emploi complet](docs/mode-emploi.md) décrit l'installation et chaque écran de l'appli.
+
 Sur le téléphone, ouvrir
 **https://github.com/F4HSL-Yves/Android-NB/releases/latest/download/qo100-nb.apk**
 (toujours la dernière version) ou scanner ce QR code :
@@ -224,8 +226,8 @@ propre signal revenir du satellite.
   l'émission à `nbd` (RF encore muette), active `arduino/ptt on`, attend
   `arduino/status/ptt on`, puis seulement `tx/mute 0`. Au relâchement :
   `tx/mute 1`, `arduino/ptt off`, puis `nbd`. Le curseur de gain règle
-  `cmd/pluto/<indicatif>/tx/gain` (-50 à 0 dB). Sans Arduino (réglage de
-  l'appli), le PTT ne commande que le mute.
+  `cmd/pluto/<indicatif>/tx/gain` (-50 à 0 dB). Sans Arduino (réglage par
+  défaut de l'appli), le PTT ne commande que le mute.
 - **Sécurités dans `nbd`** : il coupe l'OL TX (`TX_LO_powerdown`) et publie
   `arduino/ptt off` si le téléphone se déconnecte, si le flux micro
   s'arrête plus d'une seconde, si la fréquence sort du transpondeur ou

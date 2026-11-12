@@ -235,7 +235,7 @@ private fun MainScreen(c: NbConnection) {
     }
 
     // Transmit side settings that live across both tabs.
-    var arduino by rememberSaveable { mutableStateOf(prefs.getBoolean("arduino", true)) }
+    var arduino by rememberSaveable { mutableStateOf(prefs.getBoolean("arduino", false)) }
     c.arduinoPresent = arduino
     var muteTx by rememberSaveable { mutableStateOf(prefs.getBoolean("mute_rx_tx", false)) }
     LaunchedEffect(muteTx) { c.muteRxOnTx = muteTx }
