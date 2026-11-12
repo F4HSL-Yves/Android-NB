@@ -28,6 +28,10 @@
 //   {"cmd":"micgain","db":0}                microphone gain before the leveler, -20..+30 dB
 //   {"cmd":"comp","on":1,"db":10}           WDSP speech compressor, 0..20 dB
 //   {"cmd":"txeq","bass":0,"treble":0}      TX voice EQ, dB at 200 Hz / 2.7 kHz, -12..+12
+//   {"cmd":"rxgain","db":40}                AD9363 receive gain, manual, 0..70 dB
+//   {"cmd":"rxgain","auto":1}               AD9363 AGC (slow_attack)
+//   {"cmd":"beacon","hz":10489750000}       beacon to lock on: 10489500000 (CW),
+//                                           10489750000 (BPSK) or 10490000000 (CW)
 //   {"cmd":"txcal_auto"}                    measure the own tune carrier, set the TX correction
 //                                           (answer: {"type":"txcal","hz":..,"measured":..,"snr":..})
 //   binary 0x03, seq (uint16 big endian), one Opus packet: microphone,
@@ -52,7 +56,7 @@ constexpr uint8_t kSpectrumLine = 0x02;
 constexpr uint8_t kMicOpus = 0x03;
 
 struct Command {
-    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp, TxCalAuto, Nr, TxEq, Rit } type = None;
+    enum Type { None, Freq, Filter, Agc, Bitrate, Spectrum, Tx, Tune, TxCal, MicGain, Comp, TxCalAuto, Nr, TxEq, Rit, RxGain, Beacon } type = None;
     double a = 0.0, b = 0.0, c = 0.0, d = 0.0;
 };
 
@@ -69,6 +73,8 @@ struct StatusInfo {
     double filter_low = 0, filter_high = 0;
     int agc = 0, bitrate = 0, clients = 0;
     int nr = 0;
+    double beacon_hz = 0;   // beacon followed
+    double rx_gain_db = -1; // manual AD9363 gain, -1 for its AGC
     uint64_t dropped = 0;
     double uptime_s = 0;
 };

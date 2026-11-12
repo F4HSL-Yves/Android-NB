@@ -32,7 +32,7 @@ struct PlutoConfig {
     long rf_bandwidth = 2000000;
     std::string gain_mode = "slow_attack";  // or manual, fast_attack, hybrid
     double gain_db = 40.0;                  // used when gain_mode is manual
-    size_t buffer_samples = 16384;          // multiple of 4096 (Tezuka DMA)
+    size_t buffer_samples = 32768;          // multiple of 4096 (Tezuka DMA)
     bool spectrometer_on_ddc = true;        // Maia waterfall shows the NB band
 };
 
@@ -58,6 +58,12 @@ public:
     void read(std::vector<cf>& out);
     // Closes the buffer and gives the DMA back to the AD9363. Safe to repeat.
     void stop();
+
+    // Receiver gain while streaming: "manual" with db, or an AGC mode
+    // (slow_attack...). Uses its own iiod connection. Throws on refusal.
+    void set_gain(const std::string& mode, double db);
+    const std::string& gain_mode() const { return cfg_.gain_mode; }
+    double gain_db() const { return cfg_.gain_db; }
 
     double output_rate() const { return output_rate_; }
     const std::string& summary() const { return summary_; }

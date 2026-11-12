@@ -49,6 +49,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -252,6 +254,8 @@ private fun MainScreen(c: NbConnection) {
         if (connected && hello != null) {
             c.setPrefillPackets(bufferPackets)
             c.setNr(prefs.getInt("nr", 0))
+            if (prefs.contains("beacon_hz")) c.setBeacon(prefs.getLong("beacon_hz", Qo100.PSK_BEACON_HZ))
+            if (prefs.contains("rx_gain_db")) c.setRxGain(prefs.getInt("rx_gain_db", -1).takeIf { it >= 0 })
             tuneTo(dial)
             c.setRit(rit)
             if (hello.tx) {
@@ -373,7 +377,10 @@ private fun HomeTab(
             Text("QO-100 NB", style = MaterialTheme.typography.titleMedium)
             HelpButton()
             Spacer(modifier = Modifier.weight(1f))
-            BeaconBadge(status)
+            BeaconBadge(status) { hz ->
+                prefs.edit().putLong("beacon_hz", hz).apply()
+                c.setBeacon(hz)
+            }
             LinkBadge(c.link)
         }
         val problem = when {
@@ -777,6 +784,34 @@ private fun SettingsTab(
         ChipRow("Filtre", filters, filters.firstOrNull { it.low == status?.filterLowHz && it.high == status?.filterHighHz }, { it.label }) {
             c.setFilter(it.low, it.high)
         }
+        run {
+            var rxAuto by remember { mutableStateOf(prefs.getInt("rx_gain_db", -1) < 0) }
+            var rxGain by remember { mutableStateOf(prefs.getInt("rx_gain_db", -1).let { if (it < 0) 40 else it }.toFloat()) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Gain RX", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(64.dp))
+                FilterChip(
+                    selected = rxAuto, enabled = connected,
+                    onClick = {
+                        rxAuto = !rxAuto
+                        val db = if (rxAuto) null else Math.round(rxGain)
+                        prefs.edit().putInt("rx_gain_db", db ?: -1).apply()
+                        c.setRxGain(db)
+                    },
+                    label = { Text("Auto") },
+                )
+                Text(
+                    if (rxAuto) "AGC de la carte" else String.format(Locale.FRANCE, "%.0f dB", rxGain),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (!rxAuto) {
+                DbSlider("Gain RX", rxGain, 0f..70f, connected) {
+                    rxGain = it
+                    prefs.edit().putInt("rx_gain_db", Math.round(it)).apply()
+                    c.setRxGain(Math.round(it))
+                }
+            }
+        }
         ChipRow("AGC", agcModes, agcModes.firstOrNull { it.second == status?.agc }, { it.first }) { c.setAgc(it.second) }
         ChipRow("Bruit", nrModes, nrModes.firstOrNull { it.second == status?.nr }, { it.first }) {
             prefs.edit().putInt("nr", it.second).apply()
@@ -891,18 +926,44 @@ private fun DbSlider(label: String, value: Float, range: ClosedFloatingPointRang
     }
 }
 
+/** The three QO-100 NB beacons the receiver can lock on: name, frequency. */
+private val beacons = listOf(
+    "basse" to Qo100.CW_BEACON_HZ,
+    "PSK" to Qo100.PSK_BEACON_HZ,
+    "haute" to Qo100.UPPER_BEACON_HZ,
+)
+
+/** Lock state of the beacon; a tap picks which beacon to lock on. */
 @Composable
-private fun BeaconBadge(status: NbProtocol.Status?) {
-    val (text, color) = when (status?.beacon) {
-        NbProtocol.BeaconState.LOCKED -> "balise ✓" to Color(0xFF2E7D32)
-        NbProtocol.BeaconState.HOLDOVER -> "balise ~" to Color(0xFFF9A825)
-        NbProtocol.BeaconState.SEARCHING -> "balise ?" to Color(0xFFC62828)
+private fun BeaconBadge(st: NbProtocol.Status?, onPick: (Long) -> Unit) {
+    val status = st ?: return
+    val (mark, color) = when (status.beacon) {
+        NbProtocol.BeaconState.LOCKED -> "✓" to Color(0xFF2E7D32)
+        NbProtocol.BeaconState.HOLDOVER -> "~" to Color(0xFFF9A825)
+        NbProtocol.BeaconState.SEARCHING -> "?" to Color(0xFFC62828)
         else -> return
     }
-    Text(
-        text, color = Color.White, style = MaterialTheme.typography.labelMedium,
-        modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(color).padding(horizontal = 8.dp, vertical = 4.dp),
-    )
+    val name = beacons.firstOrNull { kotlin.math.abs(it.second - status.beaconHz) < 1000 }?.first ?: "balise"
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Text(
+            "$name $mark ▾", color = Color.White, style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(color).clickable { open = true }
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text("Balise de synchro", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            beacons.forEach { (label, hz) ->
+                DropdownMenuItem(
+                    text = { Text((if (kotlin.math.abs(hz - status.beaconHz) < 1000) "● " else "○ ") + "$label  ${Qo100.formatMHz(hz)}") },
+                    onClick = {
+                        open = false
+                        onPick(hz)
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable

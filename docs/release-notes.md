@@ -2,6 +2,13 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.12
+
+- **Choix de la balise de synchro** : touchez le badge balise en haut de l'accueil pour choisir la balise basse (CW, 10489,500), la balise PSK (10489,750) ou la balise haute (10490,000). Le choix est retenu.
+- **Gain du récepteur** dans Réglages réception : Auto (AGC de la carte) ou réglage manuel de 0 à 70 dB. Le choix est retenu.
+- **Tampon DMA de réception doublé** (32768 échantillons au lieu de 16384), pour mieux absorber les à-coups de la carte.
+- Ces nouveautés demandent le nouveau `nbd` sur la carte : START l'installe tout seul.
+
 ## Nouveautés de la v1.11
 
 - **Le curseur suit le doigt** : en glissant sur le spectre vers la droite, le curseur de fréquence part maintenant vers la droite (il partait à l'envers).

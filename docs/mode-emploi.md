@@ -87,7 +87,7 @@ L'appli retient ce mot de passe pour les mises à jour suivantes.
 
 Ensuite, le bouton passe à **« Ça démarre… »**, puis à **STOP** une fois la
 réception établie. Le badge en haut passe à « connecté », et le badge balise
-passe à « balise ✓ » dès que la carte s'est calée sur la balise, en quelques
+passe à « PSK ✓ » (ou le nom de la balise choisie) dès que la carte s'est calée sur la balise, en quelques
 secondes en général.
 
 Ensuite, à chaque mise sous tension, la carte reprend le mode où on l'a
@@ -100,7 +100,7 @@ De haut en bas :
 | Zone | Rôle |
 | --- | --- |
 | **?** | À côté du titre : ouvre ce mode d'emploi dans le navigateur. |
-| **Badges** | « balise ✓ » : verrouillée (vert). « balise ~ » : perdue, la dernière correction est gardée (orange). « balise ? » : recherche en cours (rouge). À côté, l'état de la liaison : connecté, connexion… ou arrêté. |
+| **Badges** | Le badge balise donne la balise suivie (basse, PSK ou haute) et son état. « ✓ » : verrouillée (vert). « ~ » : perdue, la dernière correction est gardée (orange). « ? » : recherche en cours (rouge). Touchez-le pour choisir la balise de synchro : basse (CW, 10489,500), PSK (10489,750) ou haute (10490,000). Après un changement, la carte recherche la nouvelle balise pendant quelques secondes. À côté, l'état de la liaison : connecté, connexion… ou arrêté. |
 | **Ligne de message** | Problème en cours, en rouge (MQTT injoignable, réception DATV en cours, erreur d'installation…). |
 | **Spectre et waterfall** | Toute la bande ou un zoom. Le trait rouge marque la fréquence d'écoute, la zone claire la bande passante du filtre. |
 | **Vue** | Bande entière, 100 k, 25 k ou 6 k. |
@@ -197,6 +197,7 @@ L'émission s'arrête d'elle-même si l'appli passe en arrière-plan (écran
 
 | Réglage | Choix | Conseil |
 | --- | --- | --- |
+| **Gain RX** | Auto, ou 0 à 70 dB | Auto laisse l'AGC de la carte régler le gain d'entrée. Décochez Auto pour régler le gain à la main, par exemple pour éviter la saturation si la bande est très forte. |
 | **Filtre** | 1,8 k, 2,4 k, 2,7 k, 3,2 k | 2,4 k pour la BLU courante, 1,8 k si la bande est chargée. |
 | **AGC** | Off, Lent, Moyen, Rapide | Moyen ou Lent en phonie. |
 | **Bruit** | Off, NR1, NR2 | Réducteur de bruit. NR2 est plus fort, mais peut colorer la voix. |

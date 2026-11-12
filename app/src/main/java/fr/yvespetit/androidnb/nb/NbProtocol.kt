@@ -52,6 +52,10 @@ object NbProtocol {
         val filterHighHz: Int,
         val agc: Int,
         val nr: Int = 0,
+        /** Beacon nbd locks on, Hz (0: older nbd that does not say). */
+        val beaconHz: Long = 0L,
+        /** Manual AD9363 receive gain, dB; null for its AGC or an older nbd. */
+        val rxGainDb: Double? = null,
         val bitrate: Int,
         val clients: Int,
         val dropped: Long,
@@ -139,6 +143,8 @@ object NbProtocol {
                     filterHighHz = filter.getOrNull(1)?.toInt() ?: 0,
                     agc = number(text, "agc")?.toInt() ?: 0,
                     nr = number(text, "nr")?.toInt() ?: 0,
+                    beaconHz = number(text, "beacon_hz")?.toLong() ?: 0L,
+                    rxGainDb = number(text, "rxgain")?.takeIf { it >= 0 },
                     bitrate = number(text, "bitrate")?.toInt() ?: 0,
                     clients = number(text, "clients")?.toInt() ?: 0,
                     dropped = number(text, "dropped")?.toLong() ?: 0L,
@@ -200,6 +206,9 @@ object NbProtocol {
     fun filterCommand(lowHz: Int, highHz: Int) = """{"cmd":"filter","low":$lowHz,"high":$highHz}"""
     fun agcCommand(mode: Int) = """{"cmd":"agc","mode":$mode}"""
 
+    /** Manual receive gain in dB, or null for the AD9363 AGC. */
+    fun rxGainCommand(db: Int?) = if (db == null) """{"cmd":"rxgain","auto":1}""" else """{"cmd":"rxgain","db":$db}"""
+    fun beaconCommand(hz: Long) = """{"cmd":"beacon","hz":$hz}"""
     fun nrCommand(mode: Int) = """{"cmd":"nr","mode":$mode}"""
     fun bitrateCommand(bps: Int) = """{"cmd":"bitrate","bps":$bps}"""
     /** Waterfall view shared by all clients; rate 0 stops it. centerHz 0 = band centre. */

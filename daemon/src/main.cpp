@@ -94,6 +94,7 @@ void usage() {
                  "  --http-port N    maia-httpd port (default 80)\n"
                  "  --lnb-lo HZ      nominal LNB local oscillator (default 9750000000)\n"
                  "  --lo-offset HZ   AD9363 LO above the centre, keeps DC out (default 500000)\n"
+                 "  --buffer N       RX DMA buffer, samples, multiple of 4096 (default 32768)\n"
                  "  --gain DB|MODE   manual gain in dB, or slow_attack/fast_attack/hybrid (default slow_attack)\n"
                  "  --duration S     stop after S seconds of IQ (default: until Ctrl-C)\n"
                  "  --ws PORT        WebSocket server for the phone app (Opus audio, status, commands)\n"
@@ -161,6 +162,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--http-port") o.pluto.http_port = std::atoi(next("--http-port"));
         else if (a == "--lnb-lo") o.pluto.lnb_lo_hz = std::atof(next("--lnb-lo"));
         else if (a == "--lo-offset") o.pluto.lo_offset_hz = std::atof(next("--lo-offset"));
+        else if (a == "--buffer") o.pluto.buffer_samples = static_cast<size_t>(std::atol(next("--buffer")));
         else if (a == "--duration") o.duration_s = std::atof(next("--duration"));
         else if (a == "--gain") {
             const std::string g = next("--gain");
@@ -243,7 +245,7 @@ void arduino_ptt_off(const std::string& host) {
     }
 }
 
-// Cuts the board's DMA buffers (16384 samples) into WDSP blocks.
+// Cuts the board's DMA buffers (32768 samples) into WDSP blocks.
 class LiveReader {
 public:
     explicit LiveReader(nb::PlutoSource& src) : src_(src) {}
@@ -319,7 +321,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nbd: the beacon search window falls outside the IQ bandwidth\n");
         return 2;
     }
-    nb::BeaconLock lock(cfg);
+    auto lock = std::make_unique<nb::BeaconLock>(cfg);
 
     const int block = 4096;
     // Demodulator front end: when the IQ rate is a multiple of 48 kHz, shift
@@ -448,6 +450,34 @@ int main(int argc, char** argv) {
                 filter_high = c.b;
                 rx.set_usb(filter_low, filter_high);
                 break;
+            case nb::Command::RxGain:
+                if (!pluto) {
+                    error = "rxgain: no live board (--source pluto)";
+                    break;
+                }
+                try {
+                    if (c.a < 0) pluto->set_gain("slow_attack", 0);
+                    else pluto->set_gain("manual", c.a);
+                } catch (const std::exception& e) {
+                    error = std::string("rxgain: ") + e.what();
+                }
+                break;
+            case nb::Command::Beacon: {
+                nb::BeaconLockConfig bc = cfg;
+                bc.beacon_offset_hz = c.a - o.center_hz;
+                bc.bpsk = std::abs(c.a - 10489750000.0) < 1000.0;
+                if (std::abs(bc.beacon_offset_hz) + bc.search_half_width_hz > o.rate / 2) {
+                    error = "beacon: outside the IQ bandwidth";
+                    break;
+                }
+                if (std::abs(c.a - o.beacon_hz) < 1.0) break;  // already on it
+                o.beacon_hz = c.a;
+                cfg = bc;
+                lock = std::make_unique<nb::BeaconLock>(cfg);
+                if (!o.quiet)
+                    std::fprintf(stderr, "nbd: beacon lock on %.3f MHz (%s)\n", o.beacon_hz / 1e6, cfg.bpsk ? "BPSK" : "CW");
+                break;
+            }
             case nb::Command::Rit:
                 rit_hz = c.a;
                 station_offset = std::clamp(dial_hz + rit_hz, min_freq, max_freq) - o.center_hz;
@@ -559,19 +589,19 @@ int main(int argc, char** argv) {
                 nr_applied = want;
             }
         }
-        lock.process(iq.data(), iq.size());
+        lock->process(iq.data(), iq.size());
         // Before the first lock the correction is 0 (nominal LNB); after a
         // loss it keeps the last estimate.
         audio.clear();
         if (frontend) {
-            frontend->set_frequency(station_offset + lock.correction_hz());
+            frontend->set_frequency(station_offset + lock->correction_hz());
             narrow.clear();
             frontend->process(iq.data(), iq.size(), narrow);
             rx.process(narrow.data(), audio);
             if (calib.active() && tx) {
                 const nb::TxStatus st = tx->status();
                 const auto step = calib.feed(narrow.data(), narrow.size(), static_cast<double>(narrow.size()) / 48000.0,
-                                             st.state == "on" && st.tune, lock.state() == nb::LockState::Locked);
+                                             st.state == "on" && st.tune, lock->state() == nb::LockState::Locked);
                 if (step == nb::TxCalibrator::Step::Done) {
                     tx->set_cal(calib.new_cal_hz());
                     char m[200];
@@ -584,7 +614,7 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            rx.set_offset_hz(station_offset + lock.correction_hz());
+            rx.set_offset_hz(station_offset + lock->correction_hz());
             rx.process(iq.data(), audio);
         }
         if (out) {
@@ -611,7 +641,7 @@ int main(int argc, char** argv) {
             } else if (maia_wf) {
                 got = maia_wf->take_line(spectrum_line);
             }
-            if (got) ws->broadcast_spectrum(view.pack(spectrum_line, lock.correction_hz(), spectrum_seq++));
+            if (got) ws->broadcast_spectrum(view.pack(spectrum_line, lock->correction_hz(), spectrum_seq++));
         }
         total += iq.size();
         const double t = total / o.rate;
@@ -629,7 +659,7 @@ int main(int argc, char** argv) {
         }
         if (t >= next_report) {
             next_report += 1.0;
-            const auto st = lock.status();
+            const auto st = lock->status();
             if (ws) {
                 nb::StatusInfo si;
                 si.freq_hz = o.center_hz + station_offset;
@@ -642,6 +672,8 @@ int main(int argc, char** argv) {
                 si.filter_high = filter_high;
                 si.agc = agc;
                 si.nr = nr;
+                si.beacon_hz = o.beacon_hz;
+                si.rx_gain_db = pluto && pluto->gain_mode() == "manual" ? pluto->gain_db() : -1;
                 si.bitrate = opus->bitrate();
                 si.clients = ws->clients();
                 si.dropped = ws->dropped_audio_frames();
