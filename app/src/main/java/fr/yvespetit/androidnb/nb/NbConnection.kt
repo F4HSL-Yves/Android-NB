@@ -71,6 +71,10 @@ class NbConnection {
     @Volatile private var vTxMessage = ""
     @Volatile private var pttCancel = false
     @Volatile private var savedStreamMode: String? = null
+    /** TX gain chosen in the app (saved setting), enforced on the board. */
+    @Volatile var wantedTxGainDb: Int? = null
+    @Volatile private var vTxGain: Double? = null
+    @Volatile private var gainRestored = false
     private var pttThread: Thread? = null
     private val mic = MicStreamer { seq, opus ->
         val ws = socket ?: return@MicStreamer
@@ -115,6 +119,7 @@ class NbConnection {
     fun connect(host: String, port: Int) {
         disconnect()
         lastHost = host
+        gainRestored = false
         wanted = true
         lastError = null
         mqttWorker = Thread({ mqttLoop(host, requestNb = true) }, "nb-mqtt").apply { start() }
@@ -247,7 +252,17 @@ class NbConnection {
         when (parts.drop(3).joinToString("/")) {
             "tx/stream/mode" -> vStreamMode = payload
             "tx/mute" -> payload.toDoubleOrNull()?.let { v -> main.post { txMuted = v != 0.0 } }
-            "tx/gain" -> payload.toDoubleOrNull()?.let { v -> main.post { txGainDb = v } }
+            "tx/gain" -> payload.toDoubleOrNull()?.let { v ->
+                vTxGain = v
+                main.post { txGainDb = v }
+                // Another program (SDR Console) leaves its own gain, -40 dB
+                // for instance: put ours back, once per link, outside a PTT.
+                val want = wantedTxGainDb
+                if (want != null && !gainRestored && ptt == Ptt.OFF && kotlin.math.abs(v - want) > 0.5) {
+                    gainRestored = true
+                    setTxGain(want)
+                }
+            }
         }
     }
 
@@ -323,7 +338,15 @@ class NbConnection {
                 }
             }
             if (pttCancel) throw TxFail("")
-            // 4. RF on.
+            // 4. RF on, at the gain chosen in the app (another program may
+            // have changed the board's since).
+            wantedTxGainDb?.let { g ->
+                val cur = vTxGain
+                if (cur == null || kotlin.math.abs(cur - g) > 0.5) {
+                    m.publish("cmd/pluto/$call/tx/gain", g.toString())
+                    waitFor(1500) { vTxGain?.let { kotlin.math.abs(it - g) <= 0.5 } == true }
+                }
+            }
             m.publish("cmd/pluto/$call/tx/mute", "0")
             setPtt(Ptt.ON, "Émission")
             while (!pttCancel) {
@@ -351,6 +374,7 @@ class NbConnection {
 
     /** Tezuka's TX attenuation, -50..0 dB (cmd/pluto/<call>/tx/gain). */
     fun setTxGain(db: Int) {
+        wantedTxGainDb = db.coerceIn(-50, 0)
         val call = vCallsign ?: return
         val m = mqtt ?: return
         Thread { runCatching { m.publish("cmd/pluto/$call/tx/gain", db.coerceIn(-50, 0).toString()) } }.start()

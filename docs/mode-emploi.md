@@ -109,7 +109,7 @@ De haut en bas :
 | **RIT** | Décale l'écoute de ±3 kHz sans bouger l'émission. « 0 » le remet à zéro. |
 | **Signal** | S-mètre, en dB relatifs. |
 | **Muet TX, M1 à M3** | Coupure du son pendant l'émission, et trois mémoires. |
-| **Gain TX** | Gain de sortie de la carte, de -50 à 0 dB. |
+| **Gain TX** | Gain de sortie de la carte, de -50 à 0 dB. L'appli le retient et le remet sur la carte à chaque START et à chaque PTT. |
 | **START / STOP et PTT** | En bas, sous le pouce. |
 
 Les zones d'émission (Gain TX, PTT, Muet TX) n'apparaissent que si la carte est
