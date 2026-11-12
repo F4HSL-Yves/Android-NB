@@ -91,9 +91,17 @@ void PlutoTx::open() {
     // path: a FIR designed for its own rate, and a narrow analog filter.
     // Our signal lies 0.5 to 1 MHz above the LO; either one attenuates it.
     // The FIR is not needed at 3.072 MS/s (the half-band chain does it).
+    // The receiver already did this at start; here only if something
+    // turned the FIR on since. Then the clock chain must be rebuilt (a
+    // brief glitch in reception), or it no longer matches our samples.
     try {
-        if (iiod_.read_channel_attr(phy_, tx, "filter_fir_en") != "0")
+        if (iiod_.read_channel_attr(phy_, tx, "filter_fir_en") != "0") {
             iiod_.write_channel_attr(phy_, tx, "filter_fir_en", "0");
+            const std::string want = iiod_.read_channel_attr(phy_, tx, "sampling_frequency");
+            // 2.5 MS/s: another rate above the 2.08 MS/s floor without FIR.
+            iiod_.write_channel_attr(phy_, tx, "sampling_frequency", "2500000");
+            iiod_.write_channel_attr(phy_, tx, "sampling_frequency", want);
+        }
     } catch (const IiodError&) {
     }
     iiod_.write_channel_attr(phy_, tx, "rf_bandwidth", std::to_string(cfg_.rf_bandwidth));

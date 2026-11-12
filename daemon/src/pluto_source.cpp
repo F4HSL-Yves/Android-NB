@@ -68,7 +68,29 @@ void PlutoSource::start() {
     const auto& rx = find_channel(phy_, "voltage0", false);
     const auto& lo = find_channel(phy_, "altvoltage0", true);
 
+    // Another program (SDR Console) can leave its FIR filters on, with the
+    // clock chain built around their x2 interpolation/decimation. Turn them
+    // off BEFORE setting the rate, so the driver rebuilds the chain without
+    // them: a FIR switched off afterwards (as the transmitter used to) leaves
+    // a chain that no longer matches the samples nbd writes, and the RF came
+    // out very weak until the next start.
+    {
+        const auto& tx = find_channel(phy_, "voltage0", true);
+        for (const IioChannelInfo* ch : {&rx, &tx}) {
+            try {
+                if (iiod_.read_channel_attr(phy_, *ch, "filter_fir_en") != "0")
+                    iiod_.write_channel_attr(phy_, *ch, "filter_fir_en", "0");
+            } catch (const IiodError&) {
+            }
+        }
+    }
     iiod_.write_channel_attr(phy_, rx, "rf_bandwidth", std::to_string(cfg_.rf_bandwidth));
+    // Another rate first, so the chain is computed again even when the
+    // current one already reads 3.072 MS/s.
+    try {
+        iiod_.write_channel_attr(phy_, rx, "sampling_frequency", "2500000"  /* above the 2.08 MS/s floor without FIR */);
+    } catch (const IiodError&) {
+    }
     iiod_.write_channel_attr(phy_, rx, "sampling_frequency", std::to_string(cfg_.input_rate));
     const long actual_rate = std::atol(iiod_.read_channel_attr(phy_, rx, "sampling_frequency").c_str());
     if (actual_rate <= 0 || std::labs(actual_rate - cfg_.input_rate) > cfg_.input_rate / 1000)
