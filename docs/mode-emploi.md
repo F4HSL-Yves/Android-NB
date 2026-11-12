@@ -90,8 +90,8 @@ réception établie. Le badge en haut passe à « connecté », et le badge bali
 passe à « balise ✓ » dès que la carte s'est calée sur la balise, en quelques
 secondes en général.
 
-La bande étroite redémarre ensuite d'elle-même à chaque mise sous tension de la
-carte.
+Ensuite, à chaque mise sous tension, la carte reprend le mode où on l'a
+laissée : la bande étroite, ou la radio libre après un STOP.
 
 ## 4. L'écran d'accueil
 
@@ -266,8 +266,12 @@ Un seul logiciel peut utiliser le récepteur de la carte à la fois.
   s'arrête, la carte repasse seule en bande étroite, et l'appli se reconnecte.
   Cela marche même téléphone éteint.
 - **SDR Console** : il ne prévient pas la carte. Appuyer d'abord sur **STOP**
-  dans l'appli, ce qui libère la radio. Pour reprendre la bande étroite,
-  appuyer sur **START**.
+  dans l'appli, ce qui libère la radio, puis lancer SDR Console. La radio
+  reste libre même si la carte redémarre. Pour reprendre la bande étroite,
+  quitter SDR Console et appuyer sur **START**.
+- Si SDR Console donne un son haché ou un spectre décalé, la bande étroite
+  tient encore la radio : appuyer sur START puis STOP dans l'appli, ou publier
+  `datv` sur le topic MQTT `cmd/nb/mode`, puis reconnecter SDR Console.
 
 ## 10. Trafic à distance (4G, 5G)
 
@@ -332,4 +336,4 @@ avant lui au relâchement.
 | « Micro refusé » | Autoriser le micro pour QO-100 NB dans les réglages Android. |
 | « Calibration échouée : porteuse non reçue » | Gain TX trop bas, balise non verrouillée, ou PA éteint. |
 | Son haché | Augmenter le tampon, baisser le débit ou la vitesse du waterfall. |
-| SDR Console ne reçoit rien | Appuyer sur STOP dans l'appli avant de lancer SDR Console. |
+| SDR Console ne reçoit rien, son haché ou spectre décalé | La bande étroite tient encore la radio. Appuyer sur STOP dans l'appli (ou publier `datv` sur `cmd/nb/mode`), puis reconnecter SDR Console. |
