@@ -105,7 +105,7 @@ void BeaconLock::run_acquisition() {
     // The stream's own DC (LO leakage) is a carrier too, and squares into a
     // line: when it falls in the window, keep it out of the peak search.
     const double dc_hz = -mult * cfg_.beacon_offset_hz;
-    const double dc_guard_hz = 300.0;
+    const double dc_guard_hz = cfg_.dc_guard_hz;
     for (long k = -half; k <= half; ++k) {
         const size_t idx = static_cast<size_t>((k + static_cast<long>(len)) % static_cast<long>(len));
         const double p = std::norm(spec[idx]);

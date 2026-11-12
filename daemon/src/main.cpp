@@ -316,6 +316,9 @@ int main(int argc, char** argv) {
     cfg.search_half_width_hz = o.search_hz;
     // The centre beacon is BPSK (no carrier): lock on its square.
     cfg.bpsk = o.beacon_psk || std::abs(o.beacon_hz - 10489750000.0) < 1000.0;
+    // Live from the board, the AD9363 LO (and its leakage) is lo_offset
+    // away from the stream centre: no carrier to keep out there.
+    if (live && std::abs(o.pluto.lo_offset_hz) > o.rate / 2) cfg.dc_guard_hz = 0.0;
     if (!o.quiet) std::fprintf(stderr, "nbd: beacon lock on %.3f MHz (%s)\n", o.beacon_hz / 1e6, cfg.bpsk ? "BPSK" : "CW");
     if (std::abs(cfg.beacon_offset_hz) + cfg.search_half_width_hz > o.rate / 2) {
         std::fprintf(stderr, "nbd: the beacon search window falls outside the IQ bandwidth\n");
