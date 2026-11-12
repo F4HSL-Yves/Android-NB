@@ -161,11 +161,51 @@ private fun MainScreen(c: NbConnection) {
     var permissionError by rememberSaveable { mutableStateOf<String?>(null) }
     fun localNetworkGranted() = Build.VERSION.SDK_INT < 37 ||
         context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+    // Board setup: START installs or updates QO-100 NB on the board by
+    // itself (ssh, Tezuka's default root password unless another one was
+    // accepted before) when this APK's version has not been put there yet,
+    // or when the board answers MQTT without any NB mode (SD card wiped).
+    val installer = remember { fr.yvespetit.androidnb.nb.BoardInstaller(context.applicationContext) }
+    val scope = rememberCoroutineScope()
+    var installing by remember { mutableStateOf(false) }
+    var setupMessage by remember { mutableStateOf<String?>(null) }
+    var autoTried by remember { mutableStateOf(false) }
+    fun connectNow() {
+        prefs.edit().putString("host", host).putString("port", port).apply()
+        c.connect(host, port.toIntOrNull() ?: 8073)
+    }
+    fun installThenConnect() {
+        installing = true
+        setupMessage = "Installation de QO-100 NB sur la carte…"
+        val target = host
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { installer.install(target, installer.password()) { line -> scope.launch { setupMessage = line } } }
+            }
+            installing = false
+            setupMessage = result.exceptionOrNull()?.let { e ->
+                "Installation sur la carte impossible : ${e.message} Mot de passe root : Réglages réception, « Installer sur la carte »."
+            }
+            connectNow()
+        }
+    }
+    fun start() {
+        permissionError = null
+        setupMessage = null
+        if (installer.needsUpdate(host)) installThenConnect() else connectNow()
+    }
+    LaunchedEffect(c.mqttUp, c.boardMode, installing) {
+        if (!c.mqttUp || c.boardMode != null || installing || autoTried || !installer.available()) return@LaunchedEffect
+        delay(5000)  // state/nb/mode is retained: it arrives at once when nbctl runs
+        if (c.mqttUp && c.boardMode == null && !installing) {
+            autoTried = true
+            c.disconnect()
+            installThenConnect()
+        }
+    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            permissionError = null
-            prefs.edit().putString("host", host).putString("port", port).apply()
-            c.connect(host, port.toIntOrNull() ?: 8073)
+            start()
         } else {
             permissionError = "Android refuse l'accès au réseau local : autorise « Réseau local » pour QO-100 NB " +
                 "dans les réglages de l'appli, sinon la carte reste injoignable en Wi-Fi."
@@ -173,9 +213,7 @@ private fun MainScreen(c: NbConnection) {
     }
     fun listen() {
         if (localNetworkGranted()) {
-            permissionError = null
-            prefs.edit().putString("host", host).putString("port", port).apply()
-            c.connect(host, port.toIntOrNull() ?: 8073)
+            start()
         } else {
             permissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
         }
@@ -271,7 +309,7 @@ private fun MainScreen(c: NbConnection) {
                 HomeTab(
                     c = c, dial = dial, step = step, rit = rit, span = span, viewCenter = viewCenter,
                     waterfallRate = waterfallRate, filterLow = filterLow, filterHigh = filterHigh,
-                    permissionError = permissionError, muteTx = muteTx, onMuteTx = {
+                    permissionError = setupMessage ?: permissionError, installing = installing, muteTx = muteTx, onMuteTx = {
                         muteTx = it
                         prefs.edit().putBoolean("mute_rx_tx", it).apply()
                     },
@@ -316,7 +354,7 @@ private fun MainScreen(c: NbConnection) {
 @Composable
 private fun HomeTab(
     c: NbConnection, dial: Long, step: Long, rit: Int, span: Int, viewCenter: Long, waterfallRate: Int,
-    filterLow: Int, filterHigh: Int, permissionError: String?, muteTx: Boolean, onMuteTx: (Boolean) -> Unit,
+    filterLow: Int, filterHigh: Int, permissionError: String?, installing: Boolean, muteTx: Boolean, onMuteTx: (Boolean) -> Unit,
     onListen: () -> Unit, onTune: (Long) -> Unit, onStep: (Long) -> Unit, onRit: (Int) -> Unit,
     onSpan: (Int) -> Unit, onBandWidth: (Int) -> Unit,
 ) {
@@ -339,7 +377,10 @@ private fun HomeTab(
             c.link != NbConnection.Link.DISCONNECTED && c.boardMode == "datv" -> "Réception DATV en cours : la bande étroite reprendra à son arrêt."
             else -> c.lastError
         }
-        problem?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
+        problem?.let {
+            Text(it, color = if (installing) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall, maxLines = 3)
+        }
 
         // Band: spectrum and waterfall; tap or drag to tune, pinch to zoom.
         if (hello != null && hello.spectrumSource != "off" && waterfallRate > 0) {
@@ -399,7 +440,7 @@ private fun HomeTab(
         }
         // Bottom row, under the thumb: START / STOP beside the PTT.
         val startStop: @Composable RowScope.() -> Unit = {
-            StartStopButton(c, onListen, Modifier.weight(1f))
+            StartStopButton(c, installing, onListen, Modifier.weight(1f))
         }
         if (hello?.tx == true) {
             TxControls(c, dial, connected, startStop)
@@ -537,8 +578,14 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startSto
  * disconnects and gives the board's radio back (SDR Console can use it).
  */
 @Composable
-private fun StartStopButton(c: NbConnection, onStart: () -> Unit, modifier: Modifier = Modifier) {
+private fun StartStopButton(c: NbConnection, installing: Boolean, onStart: () -> Unit, modifier: Modifier = Modifier) {
     val stop = { c.disconnect(releaseBoard = true) }
+    if (installing) {
+        OutlinedButton(onClick = {}, enabled = false, modifier = modifier.height(56.dp)) {
+            Text("Installation…", maxLines = 1, softWrap = false, fontSize = 14.sp)
+        }
+        return
+    }
     when (c.link) {
         NbConnection.Link.DISCONNECTED -> Button(
             onClick = onStart, modifier = modifier.height(56.dp),
@@ -716,7 +763,7 @@ private fun BoardInstallSection(host: String) {
     val context = LocalContext.current
     val installer = remember { fr.yvespetit.androidnb.nb.BoardInstaller(context.applicationContext) }
     val scope = rememberCoroutineScope()
-    var password by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf(installer.password()) }
     var running by remember { mutableStateOf(false) }
     val lines = remember { mutableStateListOf<String>() }
     // Android 17: ssh to the board needs "Local network" too.
@@ -727,8 +774,9 @@ private fun BoardInstallSection(host: String) {
         context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
     Section("Installer sur la carte")
     Text(
-        "Copie QO-100 NB sur la carte SD et l'ajoute au démarrage, par ssh. Sert aussi à mettre à jour " +
-            "la carte après une nouvelle version de l'appli. Le firmware Tezuka n'est pas modifié.",
+        "START installe ou met à jour QO-100 NB sur la carte tout seul, avec le mot de passe root " +
+            "par défaut de Tezuka (analog). Si tu l'as changé, saisis-le ici et installe une fois. " +
+            "Le firmware Tezuka n'est pas modifié.",
         style = MaterialTheme.typography.bodySmall,
     )
     if (!installer.available()) {

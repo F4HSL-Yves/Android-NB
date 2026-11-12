@@ -21,16 +21,39 @@ import java.io.File
  * private files). If it later changes, the install stops and says so; the
  * user can forget the old key (after a firmware reflash) with [forgetHost].
  *
- * Files go to /boot/nb on the SD card. nb.conf is only written when missing,
- * so the user's settings survive updates.
+ * Files go to /boot/nb on the SD card. nb.conf and the FFTW plans
+ * (wdspWisdom00) are only written when missing, so the user's settings
+ * survive updates.
  */
 class BoardInstaller(private val context: Context) {
 
     /** Files shipped in assets/board/, in upload order; nbd is the big one. */
-    private val files = listOf("nbctl.sh", "install.sh", "nb.conf", "nbd")
+    private val files = listOf("nbctl.sh", "install.sh", "nb.conf", "wdspWisdom00", "nbd")
+    /**
+     * Written only when missing: the user's settings, and the FFTW plans
+     * (made on a Zynq board; without them nbd spends minutes planning its
+     * FFTs at first start, and it rewrites the file itself if it must).
+     */
+    private val keepIfPresent = setOf("nb.conf", "wdspWisdom00")
     private val knownHosts = File(context.filesDir, "known_hosts")
+    private val prefs = context.getSharedPreferences("board_install", Context.MODE_PRIVATE)
 
     fun available(): Boolean = runCatching { context.assets.open("board/nbd").close() }.isSuccess
+
+    /** This APK's version: the board is updated when it changes. */
+    private val appVersion: Long = runCatching {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
+    }.getOrDefault(0L)
+
+    /** Root password last accepted by the board, else Tezuka's default. */
+    fun password(): String = prefs.getString("password", null) ?: DEFAULT_PASSWORD
+
+    /** True when [host] has not received this version of the board files yet. */
+    fun needsUpdate(host: String): Boolean = available() && prefs.getLong("installed_$host", -1L) != appVersion
+
+    /** Forgets that [host] is up to date (its SD card was wiped, for instance). */
+    fun forgetInstalled(host: String) = prefs.edit().remove("installed_$host").apply()
 
     /** Forgets the remembered host key of [host] (after reflashing the board). */
     fun forgetHost(host: String) {
@@ -71,8 +94,8 @@ class BoardInstaller(private val context: Context) {
             run(session, "mkdir -p /boot/nb", "Impossible de créer /boot/nb sur la carte SD")
             for (name in files) {
                 val target = "/boot/nb/$name"
-                if (name == "nb.conf" && exec(session, "test -f $target").first == 0) {
-                    log("nb.conf déjà présent : conservé")
+                if (name in keepIfPresent && exec(session, "test -f $target").first == 0) {
+                    log("$name déjà présent : conservé")
                     continue
                 }
                 val bytes = context.assets.open("board/$name").use { it.readBytes() }
@@ -83,10 +106,16 @@ class BoardInstaller(private val context: Context) {
             val (code, out) = exec(session, "sh /boot/nb/install.sh 2>&1")
             out.lines().filter { it.isNotBlank() }.forEach(log)
             if (code != 0) throw IllegalStateException("install.sh a échoué (code $code)")
+            prefs.edit().putLong("installed_$host", appVersion).putString("password", password).apply()
             log("Terminé : QO-100 NB est installé sur la carte.")
         } finally {
             session.disconnect()
         }
+    }
+
+    companion object {
+        /** Tezuka's root password out of the box. */
+        const val DEFAULT_PASSWORD = "analog"
     }
 
     private fun run(session: Session, command: String, error: String) {
