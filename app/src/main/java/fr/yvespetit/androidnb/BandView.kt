@@ -80,7 +80,7 @@ fun BandView(
                 }
             }
             .pointerInput(waterfall) {
-                // One finger: horizontal drag tunes. Two fingers: pinch zooms.
+                // One finger: horizontal drag moves the dial marker with the finger. Two fingers: pinch zooms.
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false)
                     var dragging = false
@@ -112,7 +112,7 @@ fun BandView(
                         ch.consume()
                         val vs = viewNow.spanHz
                         if (vs > 0 && dx != 0f) {
-                            drag[0] -= dx.toDouble() / size.width * vs
+                            drag[0] += dx.toDouble() / size.width * vs  // the marker follows the finger
                             val step = if (vs > 100_000) 100.0 else 10.0
                             tune(((drag[0] / step).roundToInt() * step).toLong())
                         }
