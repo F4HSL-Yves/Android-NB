@@ -91,6 +91,8 @@ public:
 private:
     void acquire_block(const cf* iq, size_t n);
     void run_acquisition();
+    bool acquire_at(double centre_hz, double& freq_hz);  // true: a clear peak, at freq_hz
+    void set_acq_window(size_t index);
     void track_block(const cf* iq, size_t n);
     void loop_update(double error_hz);
     void coast(double dt);
@@ -101,6 +103,14 @@ private:
     uint64_t samples_ = 0;  // total samples seen, our clock
 
     // Acquisition chain.
+    // A search wider than kAcqHalfWidth is swept in overlapping windows of
+    // that half width, one per acquisition (~1 s each): squaring a wider
+    // band would mix in more noise and bury the BPSK line.
+    std::vector<double> acq_centres_;  // window centres, Hz from the expected beacon
+    size_t acq_index_ = 0;
+    double acq_half_ = 0.0;
+    bool sweep_found_ = false;  // best peak of the current sweep
+    double sweep_snr_db_ = -100.0, sweep_freq_ = 0.0;
     Nco acq_nco_;
     FirDecimator acq_fir_;
     double acq_rate_ = 0.0;

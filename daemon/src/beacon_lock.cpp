@@ -37,7 +37,16 @@ const char* to_string(LockState s) {
 BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     : cfg_(cfg), acq_nco_(cfg.sample_rate), trk_nco_(cfg.sample_rate) {
     const double fs = cfg_.sample_rate;
-    const double w = cfg_.search_half_width_hz;
+    // Sub-window half width and overlap for wide searches.
+    constexpr double kAcqHalfWidth = 25000.0, kAcqOverlap = 10000.0;
+    const double w = std::min(cfg_.search_half_width_hz, kAcqHalfWidth);
+    acq_half_ = w;
+    acq_centres_ = {0.0};
+    const double step = 2.0 * w - kAcqOverlap;
+    for (int k = 1; (k - 1) * step + w < cfg_.search_half_width_hz && step > 0; ++k) {
+        acq_centres_.push_back(k * step);
+        acq_centres_.push_back(-k * step);
+    }
 
     // Squaring doubles the offsets: keep +/- 2w inside the decimated band.
     unsigned acq_decim = static_cast<unsigned>(std::floor(fs / ((cfg_.bpsk ? 5.0 : 2.5) * w)));
@@ -45,7 +54,7 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     acq_rate_ = fs / acq_decim;
     acq_fir_ = make_decimator(fs, acq_decim, 1.05 * w);
     acq_fft_size_ = next_pow2(static_cast<size_t>(acq_rate_));  // ~1 s
-    acq_nco_.set_frequency(cfg_.beacon_offset_hz);
+    set_acq_window(0);
 
     unsigned d1 = static_cast<unsigned>(std::lround(fs / 8000.0));
     if (d1 < 1) d1 = 1;
@@ -83,7 +92,40 @@ void BeaconLock::acquire_block(const cf* iq, size_t n) {
     if (acq_buf_.size() >= acq_fft_size_) run_acquisition();
 }
 
+void BeaconLock::set_acq_window(size_t index) {
+    acq_index_ = index % acq_centres_.size();
+    acq_nco_.set_frequency(cfg_.beacon_offset_hz + acq_centres_[acq_index_]);
+}
+
 void BeaconLock::run_acquisition() {
+    double freq = 0.0;
+    const bool found = acquire_at(cfg_.beacon_offset_hz + acq_centres_[acq_index_], freq);
+    if (acq_centres_.size() == 1) {
+        if (found) enter_tracking(freq);
+        return;
+    }
+    // Wide search: every window gets its turn, then the clearest peak of
+    // the sweep wins. Locking on the first one above the threshold could
+    // take, in the centre window, the product of the beacon with its IQ
+    // image (a line at the stream centre) while the beacon sits elsewhere.
+    if (found && (!sweep_found_ || acq_snr_db_ > sweep_snr_db_)) {
+        sweep_found_ = true;
+        sweep_snr_db_ = acq_snr_db_;
+        sweep_freq_ = freq;
+    }
+    if (!sweep_found_) sweep_snr_db_ = std::max(sweep_snr_db_, acq_snr_db_);
+    const bool last = acq_index_ + 1 == acq_centres_.size();
+    set_acq_window(acq_index_ + 1);
+    acq_buf_.clear();
+    acq_fir_.reset();  // no samples mixed at the old frequency
+    if (!last) return;
+    acq_snr_db_ = sweep_snr_db_;
+    if (sweep_found_) enter_tracking(sweep_freq_);
+    sweep_found_ = false;
+    sweep_snr_db_ = -100.0;
+}
+
+bool BeaconLock::acquire_at(double centre_hz, double& freq_hz) {
     const size_t len = acq_fft_size_;
     std::vector<std::complex<double>> spec(len);
     for (size_t i = 0; i < len; ++i) {
@@ -97,14 +139,14 @@ void BeaconLock::run_acquisition() {
 
     const double bin_hz = acq_rate_ / len;
     const double mult = cfg_.bpsk ? 2.0 : 1.0;  // squared: the line sits at 2 f
-    const long half = static_cast<long>(mult * cfg_.search_half_width_hz / bin_hz);
+    const long half = static_cast<long>(mult * acq_half_ / bin_hz);
     std::vector<double> power;
     power.reserve(2 * half + 1);
     long best = 0;
     double best_p = -1.0;
     // The stream's own DC (LO leakage) is a carrier too, and squares into a
     // line: when it falls in the window, keep it out of the peak search.
-    const double dc_hz = -mult * cfg_.beacon_offset_hz;
+    const double dc_hz = -mult * centre_hz;
     const double dc_guard_hz = cfg_.dc_guard_hz;
     for (long k = -half; k <= half; ++k) {
         const size_t idx = static_cast<size_t>((k + static_cast<long>(len)) % static_cast<long>(len));
@@ -120,23 +162,23 @@ void BeaconLock::run_acquisition() {
     std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
     const double median = std::max(sorted[sorted.size() / 2], 1e-30);
     acq_snr_db_ = 10.0 * std::log10(best_p / median);
-    if (acq_snr_db_ < cfg_.acquisition_snr_db) return;  // keep searching
+    if (acq_snr_db_ < cfg_.acquisition_snr_db) return false;  // keep searching
     // A peak against the window edge is most likely something else (a
     // station, the filter skirt) while the beacon lies outside: keep
     // searching rather than lock 25 kHz off.
     const long edge = static_cast<long>(std::ceil(mult * 1000.0 / bin_hz));
-    if (std::abs(best) >= half - edge) return;
+    if (std::abs(best) >= half - edge) return false;
 
     // IQ imbalance mirrors the beacon to the other side of the stream
     // centre: at x Hz from the expected position it sits at -2*offset - x,
     // and in this (possibly squared) spectrum at -2*mult*offset - k*bin.
     // When that is in the window, the peak must clearly beat it.
-    const long mirror = std::lround((-2.0 * mult * cfg_.beacon_offset_hz) / bin_hz) - best;
+    const long mirror = std::lround((-2.0 * mult * centre_hz) / bin_hz) - best;
     if (std::abs(mirror - best) > 2 && std::abs(mirror) + 1 < half) {
         double mirror_p = 0.0;
         for (long k = mirror - 1; k <= mirror + 1; ++k) mirror_p = std::max(mirror_p, power[static_cast<size_t>(k + half)]);
         const double margin_db = mult * cfg_.image_margin_db;
-        if (10.0 * std::log10(best_p / std::max(mirror_p, 1e-30)) < margin_db) return;  // ambiguous: wait
+        if (10.0 * std::log10(best_p / std::max(mirror_p, 1e-30)) < margin_db) return false;  // ambiguous: wait
     }
 
     // Parabolic interpolation on log power for sub-bin precision.
@@ -149,7 +191,8 @@ void BeaconLock::run_acquisition() {
         const double den = a - 2.0 * b + c;
         if (den != 0.0) delta = std::clamp(0.5 * (a - c) / den, -0.5, 0.5);
     }
-    enter_tracking(cfg_.beacon_offset_hz + (best + delta) * bin_hz / mult);
+    freq_hz = centre_hz + (best + delta) * bin_hz / mult;
+    return true;
 }
 
 void BeaconLock::enter_tracking(double beacon_freq_hz) {
@@ -207,6 +250,7 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
             state_ = LockState::Searching;
             acq_buf_.clear();
             acq_fir_.reset();
+            set_acq_window(0);
             freq_ = cfg_.beacon_offset_hz + correction_hz();  // keep last estimate for reporting
             return;
         }

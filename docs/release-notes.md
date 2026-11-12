@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.15
+
+- **Synchro PSK aussi sensible qu'avant, et toujours jusqu'à ±60 kHz** : la v1.14 filtrait une bande de ±60 kHz avant d'élever la balise PSK au carré, ce qui mélangeait plus de bruit et la rendait plus difficile à accrocher. La recherche balaie maintenant trois fenêtres étroites (une par seconde) et garde la plus nette. Le verrouillage prend environ 3 secondes.
+
 ## Nouveautés de la v1.14
 
 - **Synchro avec un LNB très décalé** : la balise PSK est maintenant cherchée jusqu'à ±60 kHz (±25 kHz avant). Un LNB décalé de +34 kHz n'était pas trouvé, et la carte s'accrochait sur un autre signal au bord de la fenêtre, ce qui décalait toute la réception. Avec un LNB décalé de plus de 25 kHz, choisissez la balise PSK.
