@@ -155,6 +155,6 @@ class BoardInstaller(private val context: Context) {
         }
         val code = channel.exitStatus
         channel.disconnect()
-        return code to output.toString(Charsets.UTF_8)
+        return code to String(output.toByteArray(), Charsets.UTF_8)
     }
 }
