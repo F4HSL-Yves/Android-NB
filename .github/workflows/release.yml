@@ -32,7 +32,7 @@ jobs:
       - name: Board package (nb/ folder for the SD card)
         run: |
           mkdir -p dist/nb
-          cp build-arm/nbd board/nbctl.sh board/nb.conf board/install.sh dist/nb/
+          cp build-arm/nbd board/nbctl.sh board/nb.conf board/install.sh board/wdspWisdom00 dist/nb/
           (cd dist && zip -r "qo100-nb-carte-${GITHUB_REF_NAME}.zip" nb)
       - uses: actions/setup-java@v4
         with:

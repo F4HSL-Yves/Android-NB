@@ -1,8 +1,13 @@
 Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 7020, Pluto) et téléphone Android.
 
+## Nouveautés de la v1.2
+
+- **Installation de la carte automatique** : au premier START, l'appli installe QO-100 NB sur la carte toute seule (mot de passe root par défaut de Tezuka), et la met à jour à chaque nouvelle version de l'appli.
+- **Démarrage immédiat** : les optimisations FFT sont fournies, nbd ne passe plus plusieurs minutes à les calculer à la première installation.
+
 ## Nouveautés de la v1.1
 
-- **Installation de la carte depuis l'appli** : plus rien à copier à la main, un bouton suffit (voir plus bas).
+- **Installation de la carte depuis l'appli** : plus rien à copier à la main.
 - **START / STOP** en bas de l'accueil, à côté du PTT. STOP rend la radio de la carte : SDR Console (ou un autre logiciel) peut alors s'en servir. START la reprend.
 - **Verrouillage balise plus fiable** au démarrage : il ne se cale plus sur le reflet de la balise, et reprend sa recherche après 15 s s'il la perd.
 
@@ -23,13 +28,14 @@ Le firmware de la carte n'est pas modifié. L'application installe elle-même ce
    ![QR code : télécharger l'APK](https://raw.githubusercontent.com/F4HSL-Yves/Android-NB/main/docs/img/qr-apk.png)
 
    Si Chrome prévient que le fichier peut être dangereux, choisir « Télécharger quand même ». Ouvrir ensuite le fichier téléchargé. La première fois, Android demande d'autoriser l'installation depuis Chrome : « Paramètres », activer « Autoriser cette source », revenir et toucher « Installer ». Si Play Protect avertit d'une appli inconnue, choisir « Installer quand même ».
-2. Ouvrir l'onglet **Réglages réception** et saisir l'adresse de la carte.
-3. Dans **Installer sur la carte**, saisir le mot de passe root de la carte (`analog` par défaut sur Tezuka), puis appuyer sur **Installer / mettre à jour**.
+2. Dans l'onglet **Réglages réception**, saisir l'adresse de la carte (192.168.1.125 par défaut).
+3. Appuyer sur **START** en bas de l'accueil.
 
-L'appli copie le programme et ses scripts dans `/boot/nb` sur la carte SD, puis ajoute le lancement au démarrage. La bande étroite démarre aussitôt, puis à chaque mise sous tension. Un démarrage DATV (Webtioune, Android-DATV) reprend la radio automatiquement, puis la rend à la bande étroite quand il s'arrête. Pour SDR Console, qui ne prévient pas la carte, appuyer d'abord sur **STOP**.
+Au premier START, l'appli installe QO-100 NB sur la carte toute seule (le bouton affiche « Installation… » quelques secondes) : elle copie le programme et ses scripts dans `/boot/nb` sur la carte SD par ssh, avec le mot de passe root par défaut de Tezuka (`analog`), puis ajoute le lancement au démarrage. Si ce mot de passe a été changé, le saisir dans **Réglages réception**, « Installer sur la carte », et appuyer une fois sur **Installer / mettre à jour**.
 
-4. Appuyer sur **START** en bas de l'accueil.
-5. Pour émettre, dans **Réglages émission** :
+La bande étroite démarre aussitôt, puis à chaque mise sous tension. Un démarrage DATV (Webtioune, Android-DATV) reprend la radio automatiquement, puis la rend à la bande étroite quand il s'arrête. Pour SDR Console, qui ne prévient pas la carte, appuyer d'abord sur **STOP**.
+
+4. Pour émettre, dans **Réglages émission** :
    - indiquer si un Arduino commande le PTT ;
    - lancer **Calibrer** une fois pour régler la correction TX (émet une porteuse quelques secondes).
    Le gain TX se règle sur l'accueil.
@@ -42,4 +48,4 @@ Sans l'appli, le zip `qo100-nb-carte-….zip` contient les mêmes fichiers : cop
 
 ## Mettre à jour
 
-Installer le nouvel APK par-dessus l'ancien, puis appuyer de nouveau sur **Installer / mettre à jour** : la carte reçoit la nouvelle version, et ses réglages sont conservés.
+Installer le nouvel APK par-dessus l'ancien (même lien), puis appuyer sur **START** : l'appli met la carte à jour toute seule, et ses réglages sont conservés.

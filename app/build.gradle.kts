@@ -62,7 +62,7 @@ android {
 }
 
 val boardAssets by tasks.registering(Copy::class) {
-    from(rootProject.file("board")) { include("nbctl.sh", "install.sh", "nb.conf") }
+    from(rootProject.file("board")) { include("nbctl.sh", "install.sh", "nb.conf", "wdspWisdom00") }
     from(rootProject.file("build-arm")) { include("nbd") }
     into(layout.buildDirectory.dir("generated/boardAssets/board"))
 }
