@@ -46,7 +46,13 @@ struct BeaconLockConfig {
     // Seconds without a coherent block before reporting holdover,
     // and before going back to a full search.
     double holdover_after_s = 5.0;
-    double reacquire_after_s = 60.0;
+    double reacquire_after_s = 15.0;
+    // Just after nbd tunes the AD9363 its IQ correction has not settled,
+    // and the beacon's mirror image (across the stream centre) can briefly
+    // be as strong as the beacon. An acquisition peak must beat its mirror
+    // by this much, in dB (doubled for BPSK, whose squaring doubles dB
+    // ratios), or the search goes on instead of locking on the image.
+    double image_margin_db = 6.0;
     // BPSK beacon (the 400 Bd centre beacon, 10489.750 MHz) instead of CW:
     // the signal is squared before the measurements, which wipes the
     // modulation and leaves a line at twice its frequency.

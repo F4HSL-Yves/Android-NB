@@ -4,7 +4,7 @@
 un Pluto ou une FishBall 7020 sous firmware Tezuka (F5OEO).
 
 Le traitement tourne sur la carte : un démon (`nbd`) lit les IQ du transpondeur
-NB fournis par le DDC de Maia, se verrouille en continu sur la balise CW,
+NB fournis par le DDC de Maia, se verrouille en continu sur la balise PSK centrale,
 démodule avec [WDSP](https://github.com/jimahlstrom/wdsp) et, à terme, envoie
 l'audio en Opus au téléphone. Seuls l'audio et un waterfall allégé passent par
 le réseau, ce qui permet le trafic à distance en 4G/5G (environ 150 kbit/s).
@@ -22,7 +22,11 @@ le réseau, ce qui permet le trafic à distance en 4G/5G (environ 150 kbit/s).
 - Transpondeur NB : 10489,500 à 10490,000 MHz en descente, 2400,000 à 2400,500 MHz en montée.
 - Balises : CW basse 10489,500, PSK 10489,750, haute 10490,000 MHz.
 - Flux IQ : 768 kS/s centré sur 10489,750 MHz, soit tout le transpondeur plus les deux balises extrêmes.
-- Le verrou suit la balise CW basse (10489,500 MHz).
+- Le verrou suit la balise PSK centrale (10489,750 MHz), comme SDR Console :
+  tout le monde lit ainsi la même fréquence. Cette balise est en BPSK 400 Bd,
+  sans porteuse : `nbd` l'élève au carré pour retrouver une raie. Sans
+  `--beacon 10489750000` dans `nb.conf`, il se cale sur la balise CW basse
+  (10489,500 MHz).
 
 ## Compiler le démon
 
@@ -115,10 +119,13 @@ python3 daemon/tools/nbws_probe.py ws://192.168.2.1:8073 --spectrum 768000,768,8
 
 ## Installer (utilisateurs)
 
-Chaque version publiée (onglet « Releases » du dépôt) contient le dossier
-`nb/` pour la carte SD, avec `install.sh`, et l'APK signé. La marche à suivre
-est dans [docs/release-notes.md](docs/release-notes.md), recopiée sur la
-page de chaque version.
+Chaque version publiée (onglet « Releases » du dépôt) contient l'APK signé,
+qui embarque `nbd` et ses scripts : le bouton « Installer sur la carte » de
+l'appli les copie par ssh dans `/boot/nb` et ajoute le lancement à
+`/mnt/jffs2/autorun.sh`. Le firmware Tezuka n'exécute rien depuis la SD, d'où
+le passage par ssh. Le zip `nb/` reste fourni pour une installation à la main.
+La marche à suivre est dans [docs/release-notes.md](docs/release-notes.md),
+recopiée sur la page de chaque version.
 
 ## Distribuer une nouvelle version
 
@@ -183,11 +190,12 @@ filtre. Toucher un signal centre le filtre dessus ; glisser à
 l'horizontale accorde comme un bouton. Vues : toute la bande, 100, 25 ou
 6 kHz (le zoom suit la fréquence).
 
-« Écouter » met d'abord la carte en mode NB par son MQTT (port 1883 :
+START met d'abord la carte en mode NB par son MQTT (port 1883 :
 `cmd/nb/mode nb`, donc zynqrx en pause et nbd lancé), puis se connecte à
-`nbd`. Un start DATV (Webtioune, Android-DATV) prend la radio et l'appli
-affiche « Réception DATV en cours » ; au stop, la carte revient d'elle-même
-en NB et l'appli se reconnecte. L'APK de debug est
+`nbd`. STOP publie `cmd/nb/mode datv` : nbd s'arrête et la radio est libre
+pour SDR Console. Un start DATV (Webtioune, Android-DATV) prend la radio et
+l'appli affiche « Réception DATV en cours » ; au stop, la carte revient
+d'elle-même en NB et l'appli se reconnecte. L'APK de debug est
 produit par la CI.
 
 ## Émission BLU (full duplex)

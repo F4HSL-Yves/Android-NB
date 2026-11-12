@@ -37,6 +37,8 @@ struct Scenario {
     double outage_from = -1.0, outage_to = -1.0;  // beacon absent in [from, to)
     bool bpsk = false;                 // 400 Bd BPSK instead of CW (centre beacon)
     double dc_amp = 0.0;               // carrier at the stream centre (LO leakage)
+    double image_amp = 0.0;            // IQ imbalance: mirror of the beacon (conjugate)
+    double image_until = 1e9;          // ...present until then (IQ correction settling)
 };
 
 struct Result {
@@ -46,6 +48,7 @@ struct Result {
     nb::LockState final_state = nb::LockState::Searching;
     bool locked_in_outage = false;
     bool holdover_seen = false;
+    bool wrong_lock = false;           // ever locked more than 1 kHz off
 };
 
 // Keying pattern: dots, dashes and gaps with roughly 60 % duty cycle.
@@ -104,6 +107,10 @@ Result run(const Scenario& sc) {
                 a *= symbol;
             }
             double re = a * std::cos(ph_b) + sc.dc_amp, im = a * std::sin(ph_b);
+            if (sc.image_amp > 0.0 && t < sc.image_until) {
+                re += sc.image_amp * a * std::cos(ph_b);
+                im -= sc.image_amp * a * std::sin(ph_b);
+            }
             if (sc.interferer_offset != 0.0) {
                 re += sc.interferer_amp * std::cos(ph_i);
                 im += sc.interferer_amp * std::sin(ph_i);
@@ -116,6 +123,9 @@ Result run(const Scenario& sc) {
         const auto st = lock.status();
         if (st.state == nb::LockState::Locked && r.lock_time < 0) r.lock_time = t;
         if (st.state == nb::LockState::Holdover) r.holdover_seen = true;
+        if (st.state != nb::LockState::Searching &&
+            std::abs(st.correction_hz - (sc.lnb_error0 + sc.drift * t)) > 1000.0)
+            r.wrong_lock = true;
         const bool outage = t >= sc.outage_from && t < sc.outage_to;
         if (outage && t > sc.outage_from + 6.0 && st.state == nb::LockState::Locked) r.locked_in_outage = true;
         if (t > 15.0 && st.state != nb::LockState::Searching) {
@@ -209,6 +219,55 @@ int main() {
         report("BPSK beacon at centre, DC spur", r);
         CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
         CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+    }
+
+    {
+        // Just after start the AD9363's IQ correction has not settled: the
+        // beacon's mirror is briefly stronger than the beacon itself (seen
+        // on the board: a lock at -21.9 kHz instead of +21.7 kHz).
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 80.0;
+        sc.lnb_error0 = 21700.0;
+        sc.drift = 0.5;
+        sc.interferer_offset = 0.0;
+        sc.image_amp = 1.5;
+        sc.image_until = 1.5;
+        const Result r = run(sc);
+        report("BPSK, strong image at start", r);
+        CHECK(!r.wrong_lock, "locked on the image");
+        CHECK(r.lock_time > 0 && r.lock_time < 6.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+    }
+    {
+        // A residual image after IQ correction (-20 dB) is harmless.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 80.0;
+        sc.lnb_error0 = 21700.0;
+        sc.drift = 0.5;
+        sc.interferer_offset = 0.0;
+        sc.image_amp = 0.1;
+        const Result r = run(sc);
+        report("BPSK, residual image", r);
+        CHECK(!r.wrong_lock, "locked on the image");
+        CHECK(r.lock_time > 0 && r.lock_time < 6.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+    }
+    {
+        // CW beacon with a strong image at start, mirror in the window.
+        Scenario sc;
+        sc.beacon_offset = -2000.0;
+        sc.lnb_error0 = 6000.0;
+        sc.interferer_offset = 0.0;
+        sc.image_amp = 1.5;
+        sc.image_until = 1.5;
+        const Result r = run(sc);
+        report("CW, strong image at start", r);
+        CHECK(!r.wrong_lock, "locked on the image");
+        CHECK(r.rms_error < 1.0, "rms %.3f", r.rms_error);
     }
 
     if (failures) {

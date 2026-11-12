@@ -49,11 +49,24 @@ android {
         compose = true
     }
 
+    // Board files for the in-app installer (assets/board/): the scripts from
+    // board/, and nbd from build-arm/ when it was built (CI and releases);
+    // without it the installer button explains that this APK has no nbd.
+    // A plain File: AGP 9 refuses a Provider here (the Copy task below runs before preBuild).
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.get().dir("generated/boardAssets").asFile)
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+val boardAssets by tasks.registering(Copy::class) {
+    from(rootProject.file("board")) { include("nbctl.sh", "install.sh", "nb.conf") }
+    from(rootProject.file("build-arm")) { include("nbd") }
+    into(layout.buildDirectory.dir("generated/boardAssets/board"))
+}
+tasks.named("preBuild") { dependsOn(boardAssets) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
@@ -62,6 +75,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
+    // ssh for the in-app board installer (maintained JSch fork).
+    implementation("com.github.mwiede:jsch:0.2.18")
 
     testImplementation("junit:junit:4.13.2")
 }

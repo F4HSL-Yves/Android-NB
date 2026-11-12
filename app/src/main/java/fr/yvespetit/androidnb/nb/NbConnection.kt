@@ -119,20 +119,36 @@ class NbConnection {
         worker = Thread({ loop("ws://$host:$port/") }, "nb-ws").apply { start() }
     }
 
-    fun disconnect() {
+    /**
+     * Stops listening. With [releaseBoard], the board's radio is also given
+     * back (nbd stopped through nbctl's datv mode, zynqrx left idle) so
+     * another program such as SDR Console can use it; the next [connect]
+     * asks for nb mode again. Done even with other clients on nbd, so a
+     * connection the board still believes open cannot keep the radio.
+     */
+    fun disconnect(releaseBoard: Boolean = false) {
+        val release = releaseBoard && boardMode == "nb"
         pttOff()
         pttThread?.join(3000)
         pttThread = null
-        // Leave pluto_stream as it was found (DATV transmissions need it).
+        // Leave pluto_stream as it was found (DATV transmissions need it),
+        // and give the radio back if asked. Sent from a thread: Android
+        // forbids the network on the main thread (the exception would be
+        // swallowed and nothing would leave); the broker link is closed
+        // only once they are out.
         val restore = savedStreamMode
         val call = vCallsign
-        if (restore != null && call != null) {
-            mqtt?.let { m -> runCatching { m.publish("cmd/pluto/$call/tx/stream/mode", restore) } }
-            savedStreamMode = null
-        }
+        savedStreamMode = null
+        val m = mqtt
         wanted = false
         socket?.close()
-        mqtt?.close()
+        Thread {
+            if (m != null) {
+                if (restore != null && call != null) runCatching { m.publish("cmd/pluto/$call/tx/stream/mode", restore) }
+                if (release) runCatching { m.publish("cmd/nb/mode", "datv") }
+            }
+            mqtt?.close()
+        }.apply { start() }.join(3000)
         worker?.join(2000)
         mqttWorker?.join(2000)
         worker = null
