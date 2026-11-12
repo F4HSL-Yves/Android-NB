@@ -53,6 +53,12 @@ struct BeaconLockConfig {
     // by this much, in dB (doubled for BPSK, whose squaring doubles dB
     // ratios), or the search goes on instead of locking on the image.
     double image_margin_db = 6.0;
+    // Half width, Hz (after squaring for BPSK), kept out of the search
+    // around the stream centre, where a file or a board without LO offset
+    // has its LO leakage. 0 when nothing sits there: on the Tezuka board
+    // the AD9363 LO is 500 kHz away, and a guard would hide the BPSK
+    // centre beacon from an LNB within 150 Hz (GPS locked, for instance).
+    double dc_guard_hz = 300.0;
     // BPSK beacon (the 400 Bd centre beacon, 10489.750 MHz) instead of CW:
     // the signal is squared before the measurements, which wipes the
     // modulation and leaves a line at twice its frequency.

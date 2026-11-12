@@ -39,6 +39,7 @@ struct Scenario {
     double dc_amp = 0.0;               // carrier at the stream centre (LO leakage)
     double image_amp = 0.0;            // IQ imbalance: mirror of the beacon (conjugate)
     double image_until = 1e9;          // ...present until then (IQ correction settling)
+    double dc_guard = 300.0;           // BeaconLockConfig::dc_guard_hz
 };
 
 struct Result {
@@ -70,6 +71,7 @@ Result run(const Scenario& sc) {
     cfg.sample_rate = sc.fs;
     cfg.beacon_offset_hz = sc.beacon_offset;
     cfg.bpsk = sc.bpsk;
+    cfg.dc_guard_hz = sc.dc_guard;
     nb::BeaconLock lock(cfg);
     std::uniform_int_distribution<int> bit(0, 1);
     double symbol = 1.0;
@@ -221,6 +223,24 @@ int main() {
         CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
     }
 
+    {
+        // GPS-locked LNB: the centre beacon sits within a few tens of Hz of
+        // the stream centre. On the board (no DC there, guard off) it locks.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 0.0;
+        sc.lnb_error0 = 40.0;
+        sc.drift = 0.05;
+        sc.interferer_offset = 0.0;
+        sc.dc_guard = 0.0;
+        const Result r = run(sc);
+        report("BPSK beacon, precise LNB", r);
+        CHECK(!r.wrong_lock, "wrong lock");
+        CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+        CHECK(r.final_state == nb::LockState::Locked, "final state");
+    }
     {
         // Just after start the AD9363's IQ correction has not settled: the
         // beacon's mirror is briefly stronger than the beacon itself (seen
