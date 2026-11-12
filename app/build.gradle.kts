@@ -77,6 +77,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     // ssh for the in-app board installer (maintained JSch fork).
     implementation("com.github.mwiede:jsch:0.2.18")
+    // Opus encoder for Android 8 and 9, which have none (pure Java libopus port).
+    implementation("io.github.jaredmdobson:concentus:1.0.2")
 
     testImplementation("junit:junit:4.13.2")
 }
