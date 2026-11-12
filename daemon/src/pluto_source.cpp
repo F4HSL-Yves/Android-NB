@@ -139,6 +139,21 @@ void PlutoSource::start() {
     summary_ = s;
 }
 
+void PlutoSource::set_gain(const std::string& mode, double db) {
+    if (!open_) throw IiodError("RX not started");
+    IiodClient c;
+    c.connect(cfg_.host, cfg_.iiod_port, 2000);
+    const auto& rx = find_channel(phy_, "voltage0", false);
+    c.write_channel_attr(phy_, rx, "gain_control_mode", mode);
+    if (mode == "manual") {
+        char g[32];
+        std::snprintf(g, sizeof g, "%.1f", db);
+        c.write_channel_attr(phy_, rx, "hardwaregain", g);
+    }
+    cfg_.gain_mode = mode;
+    if (mode == "manual") cfg_.gain_db = db;
+}
+
 void PlutoSource::set_route(bool enabled) {
     for (int attempt = 0; attempt < 3; ++attempt) {
         const uint32_t cur = iiod_.read_register(adc_, kRouteRegister);

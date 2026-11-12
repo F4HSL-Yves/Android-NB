@@ -160,6 +160,7 @@ struct FakeBoard {
         ::close(http_fd);
         iiod_thread.join();
         http_thread.join();
+        for (auto& t : iiod_clients) t.join();
     }
 
     std::string samples(size_t bytes) {
@@ -174,10 +175,19 @@ struct FakeBoard {
         return out;
     }
 
+    // iiod serves several clients at once (nbd opens a second connection
+    // to change the gain while the first one streams).
+    std::vector<std::thread> iiod_clients;
     void serve_iiod() {
         while (!stop) {
             const int c = ::accept(iiod_fd, nullptr, nullptr);
             if (c < 0) return;
+            iiod_clients.emplace_back([this, c] { serve_iiod_client(c); });
+        }
+    }
+
+    void serve_iiod_client(int c) {
+        {
             std::string line, data;
             while (read_line(c, line)) {
                 const auto t = split(line);
@@ -326,13 +336,25 @@ void test_live_stream() {
             CHECK(board.attrs["iio:device0/INPUT/voltage0/sampling_frequency"] == "3072000", "rate");
             CHECK(board.attrs["iio:device0/INPUT/voltage0/gain_control_mode"] == "slow_attack", "gain mode");
             CHECK(board.regs[0x800000BC] == 0x11, "route reg 0x%X", board.regs[0x800000BC]);
-            CHECK(board.opened_mask == "00000003" && board.opened_samples == 16384, "OPEN %zu %s",
+            CHECK(board.opened_mask == "00000003" && board.opened_samples == 32768, "OPEN %zu %s",
                   board.opened_samples, board.opened_mask.c_str());
             CHECK(!board.http_log.empty() && board.http_log[0].find("\"frequency\":-500000.0") != std::string::npos &&
                       board.http_log[0].find("\"decimation\":4") != std::string::npos,
                   "DDC design request");
         }
         CHECK(src.output_rate() == 768000.0, "output rate %.1f", src.output_rate());
+        src.set_gain("manual", 35);
+        {
+            std::lock_guard<std::mutex> lk(board.mu);
+            CHECK(board.attrs["iio:device0/INPUT/voltage0/gain_control_mode"] == "manual", "manual gain mode");
+            CHECK(board.attrs["iio:device0/INPUT/voltage0/hardwaregain"] == "35.0", "hardwaregain %s",
+                  board.attrs["iio:device0/INPUT/voltage0/hardwaregain"].c_str());
+        }
+        src.set_gain("slow_attack", 0);
+        {
+            std::lock_guard<std::mutex> lk(board.mu);
+            CHECK(board.attrs["iio:device0/INPUT/voltage0/gain_control_mode"] == "slow_attack", "AGC back");
+        }
         std::printf("  %s\n", src.summary().c_str());
 
         nb::BeaconLockConfig lc;

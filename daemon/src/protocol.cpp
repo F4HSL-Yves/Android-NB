@@ -84,6 +84,20 @@ Command parse_command(const std::string& json, std::string& error) {
             if (c.a < 0 || c.a > 2) error = "nr: mode 0..2";
             else c.type = Command::Nr;
         }
+    } else if (cmd == "rxgain") {
+        double a = 0;
+        if (json_number(json, "auto", a) && a != 0) {
+            c.a = -1;
+            c.type = Command::RxGain;
+        } else if (num("db", c.a)) {
+            if (c.a < 0 || c.a > 70) error = "rxgain: db 0..70";
+            else c.type = Command::RxGain;
+        }
+    } else if (cmd == "beacon") {
+        if (num("hz", c.a)) {
+            if (c.a < 10489400000.0 || c.a > 10490100000.0) error = "beacon: hz outside the NB band";
+            else c.type = Command::Beacon;
+        }
     } else if (cmd == "txcal_auto") {
         c.type = Command::TxCalAuto;
     } else if (cmd == "comp") {
@@ -99,12 +113,12 @@ Command parse_command(const std::string& json, std::string& error) {
 }
 
 std::string status_json(const StatusInfo& s) {
-    char buf[512];
+    char buf[640];
     std::snprintf(buf, sizeof buf,
-                  "{\"type\":\"status\",\"freq\":%.0f,\"beacon\":\"%s\",\"correction\":%.1f,\"drift\":%.3f,"
+                  "{\"type\":\"status\",\"freq\":%.0f,\"beacon\":\"%s\",\"beacon_hz\":%.0f,\"rxgain\":%.1f,\"correction\":%.1f,\"drift\":%.3f,"
                   "\"snr\":%.1f,\"s\":%.1f,\"filter\":[%.0f,%.0f],\"agc\":%d,\"nr\":%d,\"bitrate\":%d,\"clients\":%d,"
                   "\"dropped\":%llu,\"uptime\":%.0f}",
-                  s.freq_hz, s.beacon, s.correction_hz, s.drift_hz_per_s, s.snr_db, s.signal_db, s.filter_low,
+                  s.freq_hz, s.beacon, s.beacon_hz, s.rx_gain_db, s.correction_hz, s.drift_hz_per_s, s.snr_db, s.signal_db, s.filter_low,
                   s.filter_high, s.agc, s.nr, s.bitrate, s.clients, static_cast<unsigned long long>(s.dropped), s.uptime_s);
     return buf;
 }
