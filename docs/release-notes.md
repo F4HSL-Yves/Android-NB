@@ -1,5 +1,11 @@
 Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 7020, Pluto) et téléphone Android.
 
+## Nouveautés de la v1.1
+
+- **Installation de la carte depuis l'appli** : plus rien à copier à la main, un bouton suffit (voir plus bas).
+- **START / STOP** en bas de l'accueil, à côté du PTT. STOP rend la radio de la carte : SDR Console (ou un autre logiciel) peut alors s'en servir. START la reprend.
+- **Verrouillage balise plus fiable** au démarrage : il ne se cale plus sur le reflet de la balise, et reprend sa recherche après 15 s s'il la perd.
+
 ## Ce qu'il faut
 
 - Une carte avec le firmware **Tezuka** (broker MQTT inclus), reliée au LNB et, pour émettre, au PA.
@@ -14,9 +20,9 @@ Le firmware de la carte n'est pas modifié. L'application installe elle-même ce
 2. Ouvrir l'onglet **Réglages réception** et saisir l'adresse de la carte.
 3. Dans **Installer sur la carte**, saisir le mot de passe root de la carte (`analog` par défaut sur Tezuka), puis appuyer sur **Installer / mettre à jour**.
 
-L'appli copie le programme et ses scripts dans `/boot/nb` sur la carte SD, puis ajoute le lancement au démarrage. La bande étroite démarre aussitôt, puis à chaque mise sous tension. Un démarrage DATV (Webtioune, Android-DATV) reprend la radio automatiquement, puis la rend à la bande étroite quand il s'arrête.
+L'appli copie le programme et ses scripts dans `/boot/nb` sur la carte SD, puis ajoute le lancement au démarrage. La bande étroite démarre aussitôt, puis à chaque mise sous tension. Un démarrage DATV (Webtioune, Android-DATV) reprend la radio automatiquement, puis la rend à la bande étroite quand il s'arrête. Pour SDR Console, qui ne prévient pas la carte, appuyer d'abord sur **STOP**.
 
-4. Appuyer sur **Écouter**.
+4. Appuyer sur **START** en bas de l'accueil.
 5. Pour émettre, dans **Réglages émission** :
    - indiquer si un Arduino commande le PTT ;
    - lancer **Calibrer** une fois pour régler la correction TX (émet une porteuse quelques secondes).

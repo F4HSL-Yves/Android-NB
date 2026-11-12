@@ -190,11 +190,12 @@ filtre. Toucher un signal centre le filtre dessus ; glisser à
 l'horizontale accorde comme un bouton. Vues : toute la bande, 100, 25 ou
 6 kHz (le zoom suit la fréquence).
 
-« Écouter » met d'abord la carte en mode NB par son MQTT (port 1883 :
+START met d'abord la carte en mode NB par son MQTT (port 1883 :
 `cmd/nb/mode nb`, donc zynqrx en pause et nbd lancé), puis se connecte à
-`nbd`. Un start DATV (Webtioune, Android-DATV) prend la radio et l'appli
-affiche « Réception DATV en cours » ; au stop, la carte revient d'elle-même
-en NB et l'appli se reconnecte. L'APK de debug est
+`nbd`. STOP publie `cmd/nb/mode datv` : nbd s'arrête et la radio est libre
+pour SDR Console. Un start DATV (Webtioune, Android-DATV) prend la radio et
+l'appli affiche « Réception DATV en cours » ; au stop, la carte revient
+d'elle-même en NB et l'appli se reconnecte. L'APK de debug est
 produit par la CI.
 
 ## Émission BLU (full duplex)
