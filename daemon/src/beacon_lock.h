@@ -21,6 +21,10 @@
 // squares the decimated signal (a 400 Bd BPSK signal has no carrier, its
 // square has one at twice the frequency) and tracking squares after the
 // first, wider stage; measured frequencies are halved.
+// A voice station squared also shows lines, between its harmonics, that
+// can win an acquisition: with BPSK every peak of the sweep is kept, and a
+// new lock only counts once its line has stayed put for about a second;
+// otherwise the next peak is tried.
 #pragma once
 
 #include <cstddef>
@@ -86,18 +90,25 @@ public:
 
     BeaconLockStatus status() const;
     double correction_hz() const { return freq_ - cfg_.beacon_offset_hz; }
-    LockState state() const { return state_; }
+    LockState state() const { return verifying_ ? LockState::Searching : state_; }
 
 private:
     void acquire_block(const cf* iq, size_t n);
     void run_acquisition();
-    bool acquire_at(double centre_hz, double& freq_hz);  // true: a clear peak, at freq_hz
+    struct Candidate {
+        double snr_db;
+        double freq_hz;
+    };
+    // Adds the clear peaks of the window around centre_hz to out, strongest first.
+    void acquire_at(double centre_hz, std::vector<Candidate>& out);
     bool looks_like_bpsk(const std::vector<std::complex<double>>& plain, double rel_hz, double bin_hz) const;
     void set_acq_window(size_t index);
     void track_block(const cf* iq, size_t n);
     void loop_update(double error_hz);
     void coast(double dt);
     void enter_tracking(double beacon_freq_hz);
+    void lock_best();     // track the strongest candidate left, or search again
+    void back_to_search();
 
     BeaconLockConfig cfg_;
     LockState state_ = LockState::Searching;
@@ -110,8 +121,9 @@ private:
     std::vector<double> acq_centres_;  // window centres, Hz from the expected beacon
     size_t acq_index_ = 0;
     double acq_half_ = 0.0;
-    bool sweep_found_ = false;  // best peak of the current sweep
-    double sweep_snr_db_ = -100.0, sweep_freq_ = 0.0;
+    std::vector<Candidate> sweep_;    // clear peaks of the current sweep
+    std::vector<Candidate> pending_;  // ...of the last one, not tried yet
+    double sweep_snr_db_ = -100.0;
     Nco acq_nco_;
     FirDecimator acq_fir_;
     double acq_rate_ = 0.0;
@@ -131,6 +143,12 @@ private:
     double prod_mag_ = 0.0;
     unsigned block_count_ = 0;
     unsigned block_len_ = 40;
+    // BPSK: a fresh lock is only reported once its line has stayed put.
+    // A voice station squared also gives lines, between its harmonics,
+    // that can win an acquisition but move with each syllable.
+    bool verifying_ = false;
+    unsigned verify_blocks_ = 0, verify_coherent_ = 0;
+    double good_freq_ = 0.0;  // last verified position, reported while searching again
 
     // Loop state.
     double freq_ = 0.0;  // current beacon position estimate, Hz from centre

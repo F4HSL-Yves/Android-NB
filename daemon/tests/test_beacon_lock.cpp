@@ -43,6 +43,56 @@ struct Scenario {
     double search = 0.0;               // search half width, 0: config default
     double spur_offset = 0.0;          // fixed carrier (board spur, no LNB drift), Hz from centre
     double spur_amp = 0.0;             // its amplitude (0 = none)
+    double ssb_offset = 0.0;           // SSB voice station, suppressed carrier Hz from centre
+    double ssb_amp = 0.0;              // its peak amplitude (0 = none)
+};
+
+// A USB voice station: a pitch (90..180 Hz, steady within a syllable,
+// gliding a little) and its harmonics in 300..2700 Hz, syllables of
+// 0.15..0.4 s separated by short pauses. Squared, a steady pitch puts
+// lines between its harmonics, where the plain spectrum has no carrier but
+// plenty of signal: the line looks like the BPSK beacon's for a while.
+class SsbVoice {
+public:
+    explicit SsbVoice(double fs) : fs_(fs), rng_(99) { next_syllable(0.0); }
+    void sample(double t, double& re, double& im) {
+        if (t >= end_) next_syllable(t);
+        if (t < start_) return;  // pause
+        const double f0 = f0_ + glide_ * (t - start_);
+        double env = std::min(1.0, std::min(t - start_, end_ - t) / 0.03);
+        for (int h = 1; h < kMaxHarm; ++h) {
+            const double f = h * f0;
+            if (f < 300.0 || f > 2700.0) continue;
+            ph_[h] += 2.0 * kPi * f / fs_;
+            if (ph_[h] > kPi) ph_[h] -= 2.0 * kPi;
+            const double a = env * amp_[h];
+            re += a * std::cos(ph_[h]);
+            im += a * std::sin(ph_[h]);
+        }
+    }
+
+private:
+    static constexpr int kMaxHarm = 32;
+    void next_syllable(double t) {
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        start_ = t + 0.03 + 0.15 * u(rng_);
+        end_ = start_ + 0.15 + 0.25 * u(rng_);
+        f0_ = 90.0 + 90.0 * u(rng_);
+        glide_ = (u(rng_) - 0.5) * 40.0;  // Hz per second
+        double norm = 0.0;
+        for (int h = 1; h < kMaxHarm; ++h) {
+            const double f = h * f0_;
+            // Two formant humps, around 600 and 1600 Hz.
+            amp_[h] = std::exp(-std::pow((f - 600.0) / 250.0, 2)) + 0.6 * std::exp(-std::pow((f - 1600.0) / 400.0, 2));
+            norm += amp_[h];
+        }
+        for (int h = 1; h < kMaxHarm; ++h) amp_[h] /= std::max(norm, 1e-9);
+    }
+    double fs_;
+    std::mt19937 rng_;
+    double start_ = 0.0, end_ = 0.0, f0_ = 120.0, glide_ = 0.0;
+    double ph_[kMaxHarm] = {};
+    double amp_[kMaxHarm] = {};
 };
 
 struct Result {
@@ -88,7 +138,8 @@ Result run(const Scenario& sc) {
 
     const size_t block = 4096;
     std::vector<nb::cf> buf(block);
-    double ph_b = 0.0, ph_i = 0.0, ph_s = 0.0;
+    double ph_b = 0.0, ph_i = 0.0, ph_s = 0.0, ph_v = 0.0;
+    SsbVoice voice(sc.fs);
     double sum_sq = 0.0, max_err = 0.0;
     size_t n_err = 0;
     Result r;
@@ -122,6 +173,15 @@ Result run(const Scenario& sc) {
                 if (ph_s > kPi) ph_s -= 2.0 * kPi;
                 re += sc.spur_amp * std::cos(ph_s);
                 im += sc.spur_amp * std::sin(ph_s);
+            }
+            if (sc.ssb_amp > 0.0) {
+                double vr = 0.0, vi = 0.0;
+                voice.sample(t, vr, vi);
+                ph_v += 2.0 * kPi * (sc.ssb_offset + 0.3 * t) / sc.fs;  // the station drifts a little
+                if (ph_v > kPi) ph_v -= 2.0 * kPi;
+                const double c = std::cos(ph_v), sn = std::sin(ph_v);
+                re += sc.ssb_amp * (vr * c - vi * sn);
+                im += sc.ssb_amp * (vr * sn + vi * c);
             }
             if (sc.interferer_offset != 0.0) {
                 re += sc.interferer_amp * std::cos(ph_i);
@@ -328,6 +388,57 @@ int main() {
         CHECK(!r.wrong_lock, "locked on the spur");
         CHECK(r.lock_time > 0 && r.lock_time < 10.0, "lock time %.2f", r.lock_time);
         CHECK(r.rms_error < 3.0, "rms %.3f", r.rms_error);
+    }
+    {
+        // Seen on the FishBall with v1.19 (LNB +24.7 kHz): a strong SSB
+        // station 21 kHz below the stream centre won the sweep, and the loop
+        // then followed its voice (drift up to 27 Hz/s). Whatever the
+        // acquisition picks must stay a steady line before it counts as
+        // the beacon.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 0.0;
+        sc.lnb_error0 = 24700.0;
+        sc.drift = 0.3;
+        sc.interferer_offset = 0.0;
+        sc.dc_guard = 0.0;
+        sc.search = 60000.0;
+        sc.ssb_offset = -20900.0;
+        sc.ssb_amp = 8.0;
+        sc.seconds = 60.0;
+        const Result r = run(sc);
+        report("BPSK, LNB +24.7 kHz, SSB -21 kHz", r);
+        CHECK(!r.wrong_lock, "locked on the SSB station");
+        CHECK(r.lock_time > 0 && r.lock_time < 15.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+        CHECK(r.final_state == nb::LockState::Locked, "final state");
+    }
+    {
+        // Louder still.
+        // Seen on the FishBall with v1.19 (LNB +24.7 kHz): a strong SSB
+        // station 21 kHz below the stream centre won the sweep, and the loop
+        // then followed its voice (drift up to 27 Hz/s). Whatever the
+        // acquisition picks must stay a steady line before it counts as
+        // the beacon.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 0.0;
+        sc.lnb_error0 = 24700.0;
+        sc.drift = 0.3;
+        sc.interferer_offset = 0.0;
+        sc.dc_guard = 0.0;
+        sc.search = 60000.0;
+        sc.ssb_offset = -20900.0;
+        sc.ssb_amp = 25.0;
+        sc.seconds = 60.0;
+        const Result r = run(sc);
+        report("BPSK, LNB +24.7 kHz, SSB loud", r);
+        CHECK(!r.wrong_lock, "locked on the SSB station");
+        CHECK(r.lock_time > 0 && r.lock_time < 15.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+        CHECK(r.final_state == nb::LockState::Locked, "final state");
     }
     {
         // Just after start the AD9363's IQ correction has not settled: the

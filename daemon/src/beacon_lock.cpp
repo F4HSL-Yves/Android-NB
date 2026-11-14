@@ -25,6 +25,20 @@ constexpr double kCarrierRejectDb = 10.0;
 constexpr double kBeaconHumpDb = 3.0;
 // Peaks of one acquisition window tried in turn, strongest first.
 constexpr size_t kMaxCandidates = 6;
+constexpr size_t kMaxTries = 48;
+// BPSK: a new lock is checked over this many tracking blocks (40 ms
+// each) and kept when at least kVerifyCoherent of them saw a clean line
+// close to the estimate. The beacon passes all of them at any usable
+// level; a voice station's squared lines last a syllable at best.
+constexpr unsigned kVerifyBlocks = 30;
+constexpr unsigned kVerifyCoherent = 21;
+// A beacon (LNB warming, SDR reference) drifts a few Hz per second at
+// most. A loop running faster follows something else: search again.
+constexpr double kMaxDriftHzPerS = 8.0;
+// Candidates closer than this are taken as the same signal (a voice
+// station's squared spectrum is a cluster of lines; the beacon's one line
+// spans a few Hz at most).
+constexpr double kSameSignalHz = 1500.0;
 
 size_t next_pow2(size_t n) {
     size_t p = 1;
@@ -83,6 +97,7 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     k2_ = wn * wn * dt;
 
     freq_ = cfg_.beacon_offset_hz;
+    good_freq_ = freq_;
 }
 
 void BeaconLock::process(const cf* iq, size_t n) {
@@ -107,34 +122,62 @@ void BeaconLock::set_acq_window(size_t index) {
 }
 
 void BeaconLock::run_acquisition() {
-    double freq = 0.0;
-    const bool found = acquire_at(cfg_.beacon_offset_hz + acq_centres_[acq_index_], freq);
-    if (acq_centres_.size() == 1) {
-        if (found) enter_tracking(freq);
-        return;
-    }
+    const size_t before = sweep_.size();
+    acquire_at(cfg_.beacon_offset_hz + acq_centres_[acq_index_], sweep_);
+    if (sweep_.size() == before) sweep_snr_db_ = std::max(sweep_snr_db_, acq_snr_db_);
     // Wide search: every window gets its turn, then the clearest peak of
     // the sweep wins. Locking on the first one above the threshold could
     // take, in the centre window, the product of the beacon with its IQ
     // image (a line at the stream centre) while the beacon sits elsewhere.
-    if (found && (!sweep_found_ || acq_snr_db_ > sweep_snr_db_)) {
-        sweep_found_ = true;
-        sweep_snr_db_ = acq_snr_db_;
-        sweep_freq_ = freq;
-    }
-    if (!sweep_found_) sweep_snr_db_ = std::max(sweep_snr_db_, acq_snr_db_);
     const bool last = acq_index_ + 1 == acq_centres_.size();
-    set_acq_window(acq_index_ + 1);
-    acq_buf_.clear();
-    acq_fir_.reset();  // no samples mixed at the old frequency
+    if (acq_centres_.size() > 1) {
+        set_acq_window(acq_index_ + 1);
+        acq_buf_.clear();
+        acq_fir_.reset();  // no samples mixed at the old frequency
+    }
     if (!last) return;
-    acq_snr_db_ = sweep_snr_db_;
-    if (sweep_found_) enter_tracking(sweep_freq_);
-    sweep_found_ = false;
+    std::stable_sort(sweep_.begin(), sweep_.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.snr_db > b.snr_db; });
+    // Peaks within kSameSignalHz of a stronger one belong to the same
+    // signal (a voice station gives clusters of them): one try is enough.
+    pending_.clear();
+    for (const Candidate& c : sweep_) {
+        bool seen = false;
+        for (const Candidate& p : pending_) seen = seen || std::abs(p.freq_hz - c.freq_hz) < kSameSignalHz;
+        if (!seen) pending_.push_back(c);
+    }
+    sweep_.clear();
+    acq_snr_db_ = pending_.empty() ? sweep_snr_db_ : pending_.front().snr_db;
     sweep_snr_db_ = -100.0;
+    lock_best();
 }
 
-bool BeaconLock::acquire_at(double centre_hz, double& freq_hz) {
+void BeaconLock::lock_best() {
+    if (pending_.empty()) {
+        back_to_search();
+        return;
+    }
+    const Candidate c = pending_.front();
+    pending_.erase(pending_.begin());
+    // If it fails, the peaks around it (same signal) go with it.
+    pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
+                                  [&](const Candidate& p) { return std::abs(p.freq_hz - c.freq_hz) < kSameSignalHz; }),
+                   pending_.end());
+    acq_snr_db_ = c.snr_db;
+    enter_tracking(c.freq_hz);
+}
+
+void BeaconLock::back_to_search() {
+    // A rejected candidate is not reported: show the last real lock.
+    if (verifying_) freq_ = good_freq_;
+    state_ = LockState::Searching;
+    verifying_ = false;
+    acq_buf_.clear();
+    acq_fir_.reset();
+    set_acq_window(0);
+}
+
+void BeaconLock::acquire_at(double centre_hz, std::vector<Candidate>& out) {
     const size_t len = acq_fft_size_;
     std::vector<std::complex<double>> spec(len);
     std::vector<std::complex<double>> plain;  // BPSK: the unsquared spectrum too
@@ -179,7 +222,12 @@ bool BeaconLock::acquire_at(double centre_hz, double& freq_hz) {
         cands.push_back(k);
     }
     std::sort(cands.begin(), cands.end(), [&](long a, long b) { return pw(a) > pw(b); });
-    if (cands.size() > kMaxCandidates) cands.resize(kMaxCandidates);
+    // BPSK: a loud station elsewhere leaves many lines (squaring products,
+    // aliases) that the plain-spectrum checks throw away; look further
+    // down the list for the beacon, still keeping kMaxCandidates at most.
+    const size_t max_tries = cfg_.bpsk ? kMaxTries : kMaxCandidates;
+    if (cands.size() > max_tries) cands.resize(max_tries);
+    size_t kept = 0;
     acq_snr_db_ = cands.empty() ? 10.0 * std::log10(*std::max_element(power.begin(), power.end()) / median)
                                 : 10.0 * std::log10(pw(cands[0]) / median);
 
@@ -189,7 +237,11 @@ bool BeaconLock::acquire_at(double centre_hz, double& freq_hz) {
         // A peak against the window edge is most likely something else (a
         // station, the filter skirt) while the beacon lies outside: keep
         // searching rather than lock on what comes next.
-        if (std::abs(best) >= half - edge) return false;
+        // (BPSK: skip it, every lock is verified anyway.)
+        if (std::abs(best) >= half - edge) {
+            if (cfg_.bpsk) continue;
+            return;
+        }
 
         // IQ imbalance mirrors the beacon to the other side of the stream
         // centre: at x Hz from the expected position it sits at -2*offset - x,
@@ -201,7 +253,7 @@ bool BeaconLock::acquire_at(double centre_hz, double& freq_hz) {
             double mirror_p = 0.0;
             for (long k = mirror - 1; k <= mirror + 1; ++k) mirror_p = std::max(mirror_p, pw(k));
             const double margin_db = mult * cfg_.image_margin_db;
-            if (10.0 * std::log10(best_p / std::max(mirror_p, 1e-30)) < margin_db) return false;  // ambiguous: wait
+            if (10.0 * std::log10(best_p / std::max(mirror_p, 1e-30)) < margin_db) return;  // ambiguous: wait
         }
 
         // Parabolic interpolation on log power for sub-bin precision.
@@ -225,11 +277,11 @@ bool BeaconLock::acquire_at(double centre_hz, double& freq_hz) {
         // two other signals, such as the spur and the beacon).
         if (cfg_.bpsk && !looks_like_bpsk(plain, rel_hz, bin_hz)) continue;
 
-        acq_snr_db_ = 10.0 * std::log10(best_p / median);
-        freq_hz = centre_hz + rel_hz;
-        return true;
+        out.push_back({10.0 * std::log10(best_p / median), centre_hz + rel_hz});
+        // CW: the strongest clear peak is the beacon. BPSK: the others are
+        // kept in case it turns out not to be a steady line.
+        if (!cfg_.bpsk || ++kept == kMaxCandidates) return;
     }
-    return false;  // keep searching
 }
 
 bool BeaconLock::looks_like_bpsk(const std::vector<std::complex<double>>& plain, double rel_hz, double bin_hz) const {
@@ -270,6 +322,9 @@ void BeaconLock::enter_tracking(double beacon_freq_hz) {
     block_count_ = 0;
     last_carrier_sample_ = samples_;
     state_ = LockState::Locked;
+    verifying_ = cfg_.bpsk;
+    verify_blocks_ = 0;
+    verify_coherent_ = 0;
 }
 
 void BeaconLock::track_block(const cf* iq, size_t n) {
@@ -300,6 +355,7 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
             if (std::abs(err) <= limit) {
                 loop_update(err);
                 last_carrier_sample_ = samples_;
+                if (verifying_) ++verify_coherent_;
             }
         }
         coast(dt);
@@ -307,13 +363,28 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
         prod_mag_ = 0.0;
         block_count_ = 0;
 
+        if (verifying_) {
+            ++verify_blocks_;
+            // Not a steady line (too many blocks missed already, or a loop
+            // racing after it): next candidate, or a new sweep.
+            if (verify_blocks_ - verify_coherent_ > kVerifyBlocks - kVerifyCoherent ||
+                std::abs(rate_) > kMaxDriftHzPerS) {
+                lock_best();
+                return;
+            }
+            if (verify_blocks_ >= kVerifyBlocks) verifying_ = false;
+        } else if (std::abs(rate_) > kMaxDriftHzPerS) {
+            pending_.clear();
+            verifying_ = true;  // what it followed was not the beacon: do not report it
+            back_to_search();
+            return;
+        }
+        if (!verifying_) good_freq_ = freq_;
+
         const double quiet = static_cast<double>(samples_ - last_carrier_sample_) / cfg_.sample_rate;
         if (quiet > cfg_.reacquire_after_s) {
-            state_ = LockState::Searching;
-            acq_buf_.clear();
-            acq_fir_.reset();
-            set_acq_window(0);
-            freq_ = cfg_.beacon_offset_hz + correction_hz();  // keep last estimate for reporting
+            pending_.clear();
+            back_to_search();  // freq_ keeps the last estimate for reporting
             return;
         }
         state_ = quiet > cfg_.holdover_after_s ? LockState::Holdover : LockState::Locked;
@@ -332,7 +403,7 @@ void BeaconLock::coast(double dt) {
 
 BeaconLockStatus BeaconLock::status() const {
     BeaconLockStatus s;
-    s.state = state_;
+    s.state = state();
     s.correction_hz = correction_hz();
     s.drift_hz_per_s = rate_;
     s.acquisition_snr_db = acq_snr_db_;
