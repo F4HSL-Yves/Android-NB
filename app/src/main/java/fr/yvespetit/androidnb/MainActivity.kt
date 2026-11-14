@@ -398,7 +398,12 @@ private fun HomeTab(
 ) {
     val status = c.status
     val hello = c.hello
-    val prefs = LocalContext.current.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
+    val homeContext = LocalContext.current
+    val prefs = homeContext.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE)
+    val appVersion = remember {
+        runCatching { homeContext.packageManager.getPackageInfo(homeContext.packageName, 0).versionName }
+            .getOrNull()?.let { "v$it" }
+    }
     val connected = c.link == NbConnection.Link.CONNECTED
     var goTo by remember { mutableStateOf(false) }
     Column(
@@ -407,6 +412,9 @@ private fun HomeTab(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("QO-100 NB", style = MaterialTheme.typography.titleMedium)
+            appVersion?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             HelpButton()
             Spacer(modifier = Modifier.weight(1f))
             BeaconBadge(status) { hz ->
