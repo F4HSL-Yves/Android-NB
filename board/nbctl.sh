@@ -8,14 +8,17 @@
 #
 #   nbctl.sh nb | datv     switch now (and remember it for the next boot)
 #   nbctl.sh status        print the current mode
-#   nbctl.sh boot          at boot: back to the last mode (nb if none), then
-#                          listen to MQTT (run from /mnt/jffs2/autorun.sh)
+#   nbctl.sh boot          at boot: radio free (NB_BOOT_MODE, datv by default),
+#                          then listen to MQTT (run from /mnt/jffs2/autorun.sh)
 #
 # MQTT (broker on the board, 127.0.0.1:1883):
 #   cmd/nb/mode   "nb" or "datv"        switch
 #   state/nb/mode "nb" or "datv"        current mode (retained)
-# NB is the default mode. A DATV start from any client (Webtioune,
-# Android-DATV...: dt/zynqrx/process = start) stops nbd and switches to
+# The board boots with the radio free (datv mode, nbd stopped), so SDR
+# Console, Webtioune or Android-DATV can take it without the app; the app's
+# START asks for nb. nbd gives the radio back by itself (exit code 3, then
+# datv here) after NB_IDLE_EXIT seconds with no app connected. A DATV start
+# from any client (dt/zynqrx/process = start) stops nbd and switches to
 # datv, so the two never fight; the matching stop switches back to nb.
 #
 # Files live on the SD card (the root filesystem is in RAM and jffs2 is
@@ -28,7 +31,8 @@ MODE_FILE=$NB_DIR/mode
 RUN_FLAG=/tmp/nb.run
 LOG=/tmp/nbd.log
 NBD_ARGS="--source pluto --ws 8073"
-BOOT_MODE=nb
+NB_BOOT_MODE=datv
+NB_IDLE_EXIT=120
 [ -f "$NB_DIR/nb.conf" ] && . "$NB_DIR/nb.conf"
 
 log() { echo "nbctl: $*"; logger -t nbctl "$*" 2>/dev/null; }
@@ -75,7 +79,13 @@ start_nb() {
         mine() { [ "$(cat "$RUN_FLAG" 2>/dev/null)" = "$token" ]; }
         while mine; do
             echo "--- nbd start $(date)" >>"$LOG"
-            /tmp/nbd $NBD_ARGS --wisdom "$NB_DIR/" --quiet >>"$LOG" 2>&1
+            rc=0
+            /tmp/nbd $NBD_ARGS --idle-exit "$NB_IDLE_EXIT" --wisdom "$NB_DIR/" --quiet >>"$LOG" 2>&1 || rc=$?
+            if [ "$rc" = 3 ] && mine; then
+                log "no app connected for ${NB_IDLE_EXIT} s: radio given back"
+                switch datv
+                break
+            fi
             mine && sleep 3
             # Keep the log small.
             [ "$(wc -c <"$LOG")" -gt 200000 ] && tail -c 50000 "$LOG" >"$LOG.1" && mv "$LOG.1" "$LOG"
@@ -113,11 +123,11 @@ case "$1" in
 nb | datv) switch "$1" ;;
 status) current ;;
 boot)
-    # S97datv has already started zynqrx, idle. The mode left at shutdown
-    # wins (a STOP for SDR Console must survive a reboot; START asks for nb
-    # again), then BOOT_MODE from nb.conf for a fresh install.
-    mode=$(cat "$MODE_FILE" 2>/dev/null)
-    case "$mode" in nb | datv) ;; *) mode=$BOOT_MODE ;; esac
+    # S97datv has already started zynqrx, idle. The board always starts in
+    # NB_BOOT_MODE (datv: radio free for SDR Console and DATV clients); the
+    # app's START asks for nb.
+    mode=$NB_BOOT_MODE
+    case "$mode" in nb | datv) ;; *) mode=datv ;; esac
     if [ "$mode" = datv ]; then switch datv; else switch nb; fi
     # Listen for mode changes and for DATV starts, and come back if
     # mosquitto restarts.

@@ -90,8 +90,10 @@ réception établie. Le badge en haut passe à « connecté », et le badge bali
 passe à « PSK ✓ » (ou le nom de la balise choisie) dès que la carte s'est calée sur la balise, en quelques
 secondes en général.
 
-Ensuite, à chaque mise sous tension, la carte reprend le mode où on l'a
-laissée : la bande étroite, ou la radio libre après un STOP.
+À chaque mise sous tension, la carte démarre la radio libre : SDR Console ou
+le DATV peuvent s'en servir sans l'appli. START reprend la bande étroite. Si
+plus aucune appli n'est connectée pendant 2 minutes (téléphone éteint sans
+STOP, par exemple), la carte libère la radio d'elle-même.
 
 ## 4. L'écran d'accueil
 
@@ -265,10 +267,12 @@ Un seul logiciel peut utiliser le récepteur de la carte à la fois.
 - **DATV (Webtioune, Android-DATV)** : rien à faire. Un démarrage DATV prend
   la radio, et l'appli affiche « Réception DATV en cours ». Quand le DATV
   s'arrête, la carte repasse seule en bande étroite, et l'appli se reconnecte.
-  Cela marche même téléphone éteint.
-- **SDR Console** : il ne prévient pas la carte. Appuyer d'abord sur **STOP**
-  dans l'appli, ce qui libère la radio, puis lancer SDR Console. La radio
-  reste libre même si la carte redémarre. Pour reprendre la bande étroite,
+  Sans appli connectée, la carte libère de nouveau la radio au bout de
+  2 minutes.
+- **SDR Console** : il ne prévient pas la carte. Après une mise sous tension,
+  la radio est libre : SDR Console marche directement. Si l'appli vient de
+  servir, appuyer d'abord sur **STOP** (ou attendre 2 minutes sans appli
+  connectée), puis lancer SDR Console. Pour reprendre la bande étroite,
   quitter SDR Console et appuyer sur **START**.
 - Si SDR Console donne un son haché ou un spectre décalé, la bande étroite
   tient encore la radio : appuyer sur START puis STOP dans l'appli, ou publier

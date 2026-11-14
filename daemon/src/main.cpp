@@ -68,6 +68,7 @@ struct Options {
     double duration_s = 0.0;  // 0: until stopped
     // Phone app
     int ws_port = 0;  // 0: no WebSocket server
+    double idle_exit_s = 0.0;  // >0: exit (code 3) after this long with no app connected
     std::string ws_bind = "0.0.0.0";
     int bitrate = 16000;
     int opus_complexity = 5;
@@ -98,6 +99,8 @@ void usage() {
                  "  --gain DB|MODE   manual gain in dB, or slow_attack/fast_attack/hybrid (default slow_attack)\n"
                  "  --duration S     stop after S seconds of IQ (default: until Ctrl-C)\n"
                  "  --ws PORT        WebSocket server for the phone app (Opus audio, status, commands)\n"
+                 "  --idle-exit S    with --ws: exit with code 3 after S seconds with no app connected,\n"
+                 "                   so nbctl.sh gives the radio back (default 0: never)\n"
                  "  --ws-bind ADDR   address to listen on (default 0.0.0.0)\n"
                  "  --bitrate BPS    Opus bitrate (default 16000)\n"
                  "  --opus-complexity N  0..10 (default 5, lower saves CPU on the board)\n"
@@ -164,6 +167,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--lo-offset") o.pluto.lo_offset_hz = std::atof(next("--lo-offset"));
         else if (a == "--buffer") o.pluto.buffer_samples = static_cast<size_t>(std::atol(next("--buffer")));
         else if (a == "--duration") o.duration_s = std::atof(next("--duration"));
+        else if (a == "--idle-exit") o.idle_exit_s = std::atof(next("--idle-exit"));
         else if (a == "--gain") {
             const std::string g = next("--gain");
             char* end = nullptr;
@@ -572,6 +576,8 @@ int main(int argc, char** argv) {
     double next_report = 1.0;
     const uint64_t max_samples = o.duration_s > 0 ? static_cast<uint64_t>(o.duration_s * o.rate) : UINT64_MAX;
     int exit_code = 0;
+    // Seconds of IQ since an app was last connected (counted from the start).
+    double idle_since_t = 0.0;
     auto next_block = [&]() -> bool {
         if (total >= max_samples || g_stop) return false;
         if (!live) {
@@ -664,6 +670,12 @@ int main(int argc, char** argv) {
             const auto due = wall_start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                               std::chrono::duration<double>(t));
             std::this_thread::sleep_until(due);
+        }
+        if (ws && ws->clients() > 0) idle_since_t = t;
+        if (ws && o.idle_exit_s > 0.0 && t - idle_since_t >= o.idle_exit_s) {
+            if (!o.quiet) std::fprintf(stderr, "nbd: no app for %.0f s, giving the radio back\n", o.idle_exit_s);
+            exit_code = 3;
+            break;
         }
         if (t >= next_report) {
             next_report += 1.0;
