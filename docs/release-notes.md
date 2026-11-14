@@ -4,7 +4,7 @@ Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/
 
 ## Nouveautés de la prochaine version
 
-- **Mise à jour automatique de la carte, comme sur iPhone** : à chaque START, l'appli Android regarde sur GitHub s'il existe une version plus récente du programme de la carte, la télécharge et l'installe. Plus besoin d'installer un nouvel APK pour corriger la carte. Il faut installer cette version de l'APK une fois ; ensuite, les mises à jour de la carte se font toutes seules.
+- **Mise à jour automatique de la carte, comme sur iPhone** : à chaque START, l'appli Android regarde sur GitHub s'il existe une version plus récente du programme de la carte, la télécharge et l'installe. Plus besoin d'installer un nouvel APK pour corriger la carte. Il faut installer cette version de l'APK une fois ; ensuite, les mises à jour de la carte se font toutes seules. C'est aussi elle qui apporte à la carte les changements des v1.16 et v1.17 (radio libre au démarrage pour SDR Console, synchro PSK corrigée) si vous veniez d'une version plus ancienne.
 
 ## Nouveautés de la v1.17
 
