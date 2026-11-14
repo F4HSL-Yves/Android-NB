@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.20
+
+- **Plus de faux verrouillage PSK sur une station SSB** : une voix SSB forte, élevée au carré comme la balise, donne des raies qui pouvaient gagner la recherche (vu sur une FishBall, LNB +24,7 kHz : verrouillage 45 kHz à côté, la balise restait à droite). Un verrouillage ne compte maintenant qu'une fois la raie restée stable environ une seconde ; sinon le pic suivant est essayé. La synchro PSK prend 1 à 2 secondes de plus.
+
 ## Nouveautés de la v1.19
 
 - **Numéro de version affiché** en haut de l'écran d'accueil, à côté de « QO-100 NB ».
