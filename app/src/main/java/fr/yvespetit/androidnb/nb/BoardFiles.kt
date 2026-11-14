@@ -52,6 +52,16 @@ class BoardFiles(private val context: Context) {
             .onFailure { log("Téléchargement impossible (${it.message}) : fichiers ${have ?: "?"} gardés") }
     }
 
+    /**
+     * Tag of the latest GitHub release when it is newer than this APK (seen
+     * at the last refresh), so the app can offer to download the new APK.
+     */
+    fun newerApp(): String? {
+        if (!bundledAvailable()) return null  // development build
+        val latest = prefs.getString("latest_tag", null) ?: return null
+        return latest.takeIf { compareTags(it, bundledTag) > 0 }
+    }
+
     /** The newest files the phone has: downloaded release or the APK's own. */
     fun best(): Bundle {
         val cached = cachedTag
@@ -72,6 +82,7 @@ class BoardFiles(private val context: Context) {
             if (conn.responseCode != 200) throw IllegalStateException("GitHub ${conn.responseCode}")
             val json = JSONObject(conn.inputStream.bufferedReader().readText())
             val tag = json.getString("tag_name")
+            prefs.edit().putString("latest_tag", tag).apply()
             val assets = json.getJSONArray("assets")
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
@@ -112,6 +123,9 @@ class BoardFiles(private val context: Context) {
     }
 
     companion object {
+        /** Page where the latest APK is downloaded. */
+        const val RELEASES_URL = "https://github.com/F4HSL-Yves/Android-NB/releases/latest"
+
         private const val API = "https://api.github.com/repos/F4HSL-Yves/Android-NB/releases/latest"
 
         /** Files of the board package, in upload order; nbd is the big one. */

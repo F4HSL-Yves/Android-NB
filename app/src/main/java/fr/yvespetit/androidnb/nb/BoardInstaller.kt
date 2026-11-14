@@ -31,6 +31,9 @@ class BoardInstaller(private val context: Context) {
 
     private val files = BoardFiles.NAMES
     private val source = BoardFiles(context)
+
+    /** Latest release tag when it is newer than this APK, else null. */
+    fun newerApp(): String? = source.newerApp()
     /**
      * Written only when missing: the user's settings, and the FFTW plans
      * (made on a Zynq board; without them nbd spends minutes planning its

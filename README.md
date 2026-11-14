@@ -1,5 +1,16 @@
 # Android-NB
 
+> **Utilisateurs Android : installez la dernière version une fois à la main.**
+> Jusqu'à la v1.17, l'appli Android ne vérifie pas les nouvelles versions : elle ne met la carte à jour qu'avec les fichiers qu'elle contient. Si vous avez la v1.15 ou une version plus ancienne, votre carte n'a pas reçu les dernières améliorations :
+> - **radio libre au démarrage** pour SDR Console, Webtioune ou Android-DATV, sans passer par STOP ;
+> - **radio rendue toute seule** après 2 minutes sans appli ;
+> - **synchro PSK corrigée** : plus de faux verrouillage sur une porteuse quand le LNB est très décalé.
+>
+> Téléchargez l'APK de la [dernière version](https://github.com/F4HSL-Yves/Android-NB/releases/latest), installez-le par-dessus l'ancien (vos réglages sont gardés), puis appuyez sur **START** : la carte est mise à jour en quelques secondes.
+> **Depuis la v1.18, l'appli vérifie à chaque START s'il y a du nouveau sur GitHub et met la carte à jour toute seule, comme l'appli iPhone.**
+>
+> Attention : n'utilisez pas « Installer / mettre à jour » avec une ancienne appli Android sur une carte déjà mise à jour (par l'iPhone par exemple) : la carte reviendrait à l'ancienne version.
+
 Émetteur-récepteur QO-100 narrowband piloté depuis un téléphone Android, avec
 un Pluto ou une FishBall 7020 sous firmware Tezuka (F5OEO).
 
