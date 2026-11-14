@@ -2,7 +2,7 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
-## Nouveautés de la prochaine version
+## Nouveautés de la v1.16
 
 - **SDR Console utilisable sans l'appli** : la carte démarre maintenant la radio libre, au lieu de lancer la bande étroite. SDR Console, Webtioune ou Android-DATV s'en servent directement ; START dans l'appli reprend la bande étroite.
 - **La carte rend la radio toute seule** après 2 minutes sans appli connectée (téléphone éteint sans STOP, par exemple). Réglable par `NB_IDLE_EXIT` dans `/boot/nb/nb.conf` (0 : jamais).
