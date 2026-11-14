@@ -2,7 +2,7 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
-## Nouveautés de la prochaine version
+## Nouveautés de la v1.17
 
 - **Plus de faux verrouillage sur une porteuse** : avec un LNB décalé d'environ +25 kHz, la synchro PSK pouvait s'accrocher sur une porteuse fixe 40 kHz à côté de la balise (vu sur une FishBall), et la réception était alors décalée d'autant. La balise PSK n'a pas de porteuse : un signal qui en est une n'est plus pris pour elle, et la recherche essaie les pics suivants de la fenêtre.
 
