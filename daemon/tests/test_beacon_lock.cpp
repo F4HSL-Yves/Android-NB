@@ -41,6 +41,8 @@ struct Scenario {
     double image_until = 1e9;          // ...present until then (IQ correction settling)
     double dc_guard = 300.0;           // BeaconLockConfig::dc_guard_hz
     double search = 0.0;               // search half width, 0: config default
+    double spur_offset = 0.0;          // fixed carrier (board spur, no LNB drift), Hz from centre
+    double spur_amp = 0.0;             // its amplitude (0 = none)
 };
 
 struct Result {
@@ -86,7 +88,7 @@ Result run(const Scenario& sc) {
 
     const size_t block = 4096;
     std::vector<nb::cf> buf(block);
-    double ph_b = 0.0, ph_i = 0.0;
+    double ph_b = 0.0, ph_i = 0.0, ph_s = 0.0;
     double sum_sq = 0.0, max_err = 0.0;
     size_t n_err = 0;
     Result r;
@@ -114,6 +116,12 @@ Result run(const Scenario& sc) {
             if (sc.image_amp > 0.0 && t < sc.image_until) {
                 re += sc.image_amp * a * std::cos(ph_b);
                 im -= sc.image_amp * a * std::sin(ph_b);
+            }
+            if (sc.spur_amp > 0.0) {
+                ph_s += 2.0 * kPi * sc.spur_offset / sc.fs;
+                if (ph_s > kPi) ph_s -= 2.0 * kPi;
+                re += sc.spur_amp * std::cos(ph_s);
+                im += sc.spur_amp * std::sin(ph_s);
             }
             if (sc.interferer_offset != 0.0) {
                 re += sc.interferer_amp * std::cos(ph_i);
@@ -276,6 +284,50 @@ int main() {
         const Result r = run(sc);
         report("CW beacon out of reach, edge carrier", r);
         CHECK(!r.wrong_lock, "locked on the edge carrier");
+    }
+    {
+        // Seen on the FishBall (LNB +24.7 kHz): a steady carrier 16 kHz
+        // below the stream centre, without the LNB drift (a spur of the
+        // board itself), squares into a cleaner line than the BPSK beacon
+        // and won the sweep. The beacon has no carrier: a line that is also
+        // a carrier in the plain spectrum is not the beacon.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 0.0;
+        sc.lnb_error0 = 24700.0;
+        sc.drift = 0.3;
+        sc.interferer_offset = 0.0;
+        sc.dc_guard = 0.0;
+        sc.search = 60000.0;
+        sc.spur_offset = -16000.0;
+        sc.spur_amp = 3.0;
+        const Result r = run(sc);
+        report("BPSK, LNB +24.7 kHz, spur -16 kHz", r);
+        CHECK(!r.wrong_lock, "locked on the spur");
+        CHECK(r.lock_time > 0 && r.lock_time < 6.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+    }
+    {
+        // Same with a weak beacon (42 dB-Hz): the checks on the plain
+        // spectrum must not throw the real beacon away.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.beacon_offset = 0.0;
+        sc.lnb_error0 = 24700.0;
+        sc.drift = 0.3;
+        sc.interferer_offset = 0.0;
+        sc.dc_guard = 0.0;
+        sc.search = 60000.0;
+        sc.cn0_dbhz = 42.0;
+        sc.spur_offset = -16000.0;
+        sc.spur_amp = 0.5;
+        const Result r = run(sc);
+        report("weak BPSK, LNB +24.7 kHz, spur", r);
+        CHECK(!r.wrong_lock, "locked on the spur");
+        CHECK(r.lock_time > 0 && r.lock_time < 10.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 3.0, "rms %.3f", r.rms_error);
     }
     {
         // Just after start the AD9363's IQ correction has not settled: the
