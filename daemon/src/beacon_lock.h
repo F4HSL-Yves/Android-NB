@@ -92,6 +92,7 @@ private:
     void acquire_block(const cf* iq, size_t n);
     void run_acquisition();
     bool acquire_at(double centre_hz, double& freq_hz);  // true: a clear peak, at freq_hz
+    bool looks_like_bpsk(const std::vector<std::complex<double>>& plain, double rel_hz, double bin_hz) const;
     void set_acq_window(size_t index);
     void track_block(const cf* iq, size_t n);
     void loop_update(double error_hz);
