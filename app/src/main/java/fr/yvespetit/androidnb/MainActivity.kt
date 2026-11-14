@@ -195,7 +195,15 @@ private fun MainScreen(c: NbConnection) {
     fun start() {
         permissionError = null
         setupMessage = null
-        if (installer.needsUpdate(host)) installThenConnect() else connectNow()
+        val target = host
+        installing = true
+        setupMessage = "Vérification de la carte…"
+        scope.launch {
+            val update = withContext(Dispatchers.IO) { runCatching { installer.needsUpdate(target) }.getOrDefault(false) }
+            installing = false
+            setupMessage = null
+            if (update) installThenConnect() else connectNow()
+        }
     }
     LaunchedEffect(c.mqttUp, c.boardMode, installing) {
         if (!c.mqttUp || c.boardMode != null || installing || autoTried || !installer.available()) return@LaunchedEffect
