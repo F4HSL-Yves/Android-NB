@@ -2,7 +2,7 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
-## Nouveautés de la prochaine version
+## Nouveautés de la v1.18
 
 > **Utilisateurs Android : installez cette version une fois à la main.**
 > Jusqu'à la v1.17, l'appli Android ne vérifie pas les nouvelles versions : elle ne met la carte à jour qu'avec les fichiers qu'elle contient. Si vous avez la v1.15 ou une version plus ancienne, votre carte n'a pas reçu les dernières améliorations :
