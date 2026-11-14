@@ -173,6 +173,8 @@ private fun MainScreen(c: NbConnection) {
     var installing by remember { mutableStateOf(false) }
     var setupMessage by remember { mutableStateOf<String?>(null) }
     var autoTried by remember { mutableStateOf(false) }
+    // Newer APK on GitHub (seen at the last START): offered in a banner.
+    var newerApp by remember { mutableStateOf(installer.newerApp()) }
     fun connectNow() {
         prefs.edit().putString("host", host).putString("port", port).apply()
         c.connect(host, port.toIntOrNull() ?: 8073)
@@ -195,7 +197,16 @@ private fun MainScreen(c: NbConnection) {
     fun start() {
         permissionError = null
         setupMessage = null
-        if (installer.needsUpdate(host)) installThenConnect() else connectNow()
+        val target = host
+        installing = true
+        setupMessage = "Vérification de la carte…"
+        scope.launch {
+            val update = withContext(Dispatchers.IO) { runCatching { installer.needsUpdate(target) }.getOrDefault(false) }
+            installing = false
+            setupMessage = null
+            newerApp = installer.newerApp()
+            if (update) installThenConnect() else connectNow()
+        }
     }
     LaunchedEffect(c.mqttUp, c.boardMode, installing) {
         if (!c.mqttUp || c.boardMode != null || installing || autoTried || !installer.available()) return@LaunchedEffect
@@ -311,6 +322,26 @@ private fun MainScreen(c: NbConnection) {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        newerApp?.let { tag ->
+            Text(
+                "Nouvelle version de l'appli disponible ($tag) : touchez ici pour la télécharger.",
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .clickable {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(fr.yvespetit.androidnb.nb.BoardFiles.RELEASES_URL),
+                                ),
+                            )
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (tab == 0) {
                 HomeTab(

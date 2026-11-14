@@ -11,7 +11,9 @@ import java.io.File
 /**
  * Installs or updates QO-100 NB on the user's own Tezuka board from the
  * phone, over ssh, with the root password the user types. The board files
- * ship inside the APK (assets/board/), so nothing is copied by hand.
+ * come from the latest GitHub release when it is newer than this APK, else
+ * from the APK itself (assets/board/, see [BoardFiles]), so nothing is
+ * copied by hand and a new nbd needs no new APK.
  *
  * Why ssh at all: the Tezuka firmware only runs /mnt/jffs2/autorun.sh at
  * boot, in the board's internal flash, which a PC copying to the SD card
@@ -27,8 +29,11 @@ import java.io.File
  */
 class BoardInstaller(private val context: Context) {
 
-    /** Files shipped in assets/board/, in upload order; nbd is the big one. */
-    private val files = listOf("nbctl.sh", "install.sh", "nb.conf", "wdspWisdom00", "nbd")
+    private val files = BoardFiles.NAMES
+    private val source = BoardFiles(context)
+
+    /** Latest release tag when it is newer than this APK, else null. */
+    fun newerApp(): String? = source.newerApp()
     /**
      * Written only when missing: the user's settings, and the FFTW plans
      * (made on a Zynq board; without them nbd spends minutes planning its
@@ -38,22 +43,36 @@ class BoardInstaller(private val context: Context) {
     private val knownHosts = File(context.filesDir, "known_hosts")
     private val prefs = context.getSharedPreferences("board_install", Context.MODE_PRIVATE)
 
-    fun available(): Boolean = runCatching { context.assets.open("board/nbd").close() }.isSuccess
+    fun available(): Boolean = source.available()
 
-    /** This APK's version: the board is updated when it changes. */
+    /** This APK's version: before release tags were recorded, installs were marked with it. */
     private val appVersion: Long = runCatching {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
         if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
     }.getOrDefault(0L)
 
+    /** Release tag this phone last installed on [host], if any. */
+    private fun installedTag(host: String): String? =
+        prefs.getString("installed_tag_$host", null)
+            ?: source.bundledTag.takeIf { prefs.getLong("installed_$host", -1L) == appVersion }
+
     /** Root password last accepted by the board, else Tezuka's default. */
     fun password(): String = prefs.getString("password", null) ?: DEFAULT_PASSWORD
 
-    /** True when [host] has not received this version of the board files yet. */
-    fun needsUpdate(host: String): Boolean = available() && prefs.getLong("installed_$host", -1L) != appVersion
+    /**
+     * True when the newest board files (latest GitHub release, or this APK's
+     * own when GitHub is out of reach) are newer than what this phone put on
+     * [host]. Blocking: asks GitHub, and downloads a newer release.
+     */
+    fun needsUpdate(host: String): Boolean {
+        source.refresh()
+        if (!available()) return false
+        val done = installedTag(host) ?: return true
+        return BoardFiles.compareTags(source.best().tag, done) > 0
+    }
 
     /** Forgets that [host] is up to date (its SD card was wiped, for instance). */
-    fun forgetInstalled(host: String) = prefs.edit().remove("installed_$host").apply()
+    fun forgetInstalled(host: String) = prefs.edit().remove("installed_$host").remove("installed_tag_$host").apply()
 
     /** Forgets the remembered host key of [host] (after reflashing the board). */
     fun forgetHost(host: String) {
@@ -63,6 +82,8 @@ class BoardInstaller(private val context: Context) {
 
     /** Runs the whole install; progress lines go to [log]. Throws on failure. */
     fun install(host: String, password: String, log: (String) -> Unit) {
+        source.refresh(log)
+        val bundle = source.best()
         knownHosts.createNewFile()
         val jsch = JSch().apply { setKnownHosts(knownHosts.absolutePath) }
         val session = jsch.getSession("root", host, 22).apply {
@@ -98,7 +119,7 @@ class BoardInstaller(private val context: Context) {
                     log("$name déjà présent : conservé")
                     continue
                 }
-                val bytes = context.assets.open("board/$name").use { it.readBytes() }
+                val bytes = bundle.bytes(name)
                 log("Copie de $name (${bytes.size / 1024} ko)…")
                 upload(session, bytes, target)
             }
@@ -106,8 +127,9 @@ class BoardInstaller(private val context: Context) {
             val (code, out) = exec(session, "sh /boot/nb/install.sh 2>&1")
             out.lines().filter { it.isNotBlank() }.forEach(log)
             if (code != 0) throw IllegalStateException("install.sh a échoué (code $code)")
-            prefs.edit().putLong("installed_$host", appVersion).putString("password", password).apply()
-            log("Terminé : QO-100 NB est installé sur la carte.")
+            prefs.edit().putLong("installed_$host", appVersion).putString("installed_tag_$host", bundle.tag)
+                .putString("password", password).apply()
+            log("Terminé : QO-100 NB ${bundle.tag} est installé sur la carte.")
         } finally {
             session.disconnect()
         }

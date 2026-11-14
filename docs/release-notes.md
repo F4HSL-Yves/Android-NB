@@ -2,6 +2,22 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la prochaine version
+
+> **Utilisateurs Android : installez cette version une fois à la main.**
+> Jusqu'à la v1.17, l'appli Android ne vérifie pas les nouvelles versions : elle ne met la carte à jour qu'avec les fichiers qu'elle contient. Si vous avez la v1.15 ou une version plus ancienne, votre carte n'a pas reçu les dernières améliorations :
+> - **radio libre au démarrage** pour SDR Console, Webtioune ou Android-DATV, sans passer par STOP ;
+> - **radio rendue toute seule** après 2 minutes sans appli ;
+> - **synchro PSK corrigée** : plus de faux verrouillage sur une porteuse quand le LNB est très décalé.
+>
+> Téléchargez l'APK de la [dernière version](https://github.com/F4HSL-Yves/Android-NB/releases/latest), installez-le par-dessus l'ancien (vos réglages sont gardés), puis appuyez sur **START** : la carte est mise à jour en quelques secondes.
+> **À partir de cette version, l'appli vérifie à chaque START s'il y a du nouveau sur GitHub et met la carte à jour toute seule, comme l'appli iPhone.**
+>
+> Attention : n'utilisez pas « Installer / mettre à jour » avec une ancienne appli Android sur une carte déjà mise à jour (par l'iPhone par exemple) : la carte reviendrait à l'ancienne version.
+
+- **Mise à jour automatique de la carte, comme sur iPhone** : à chaque START, l'appli Android regarde sur GitHub s'il existe une version plus récente du programme de la carte, la télécharge et l'installe. Plus besoin d'installer un nouvel APK pour corriger la carte. Il faut installer cette version de l'APK une fois ; ensuite, les mises à jour de la carte se font toutes seules. C'est aussi elle qui apporte à la carte les changements des v1.16 et v1.17 (radio libre au démarrage pour SDR Console, synchro PSK corrigée) si vous veniez d'une version plus ancienne.
+- **Nouvelle version de l'appli signalée** : quand une version plus récente de l'APK est publiée, un bandeau en haut de l'écran le dit ; le toucher ouvre la page de téléchargement.
+
 ## Nouveautés de la v1.17
 
 - **Plus de faux verrouillage sur une porteuse** : avec un LNB décalé d'environ +25 kHz, la synchro PSK pouvait s'accrocher sur une porteuse fixe 40 kHz à côté de la balise (vu sur une FishBall), et la réception était alors décalée d'autant. La balise PSK n'a pas de porteuse : un signal qui en est une n'est plus pris pour elle, et la recherche essaie les pics suivants de la fenêtre.

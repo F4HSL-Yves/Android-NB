@@ -294,9 +294,17 @@ Compter environ 150 kbit/s avec le waterfall, 20 kbit/s sans.
 
 ## 11. Mettre à jour
 
+**La carte** se met à jour toute seule : à chaque START, l'appli regarde sur
+GitHub s'il existe une version plus récente du programme de la carte, la
+télécharge et l'installe (quelques secondes). Sans internet, elle garde la
+version déjà sur le téléphone.
+
+**L'appli** elle-même : quand une version plus récente est publiée, un
+bandeau en haut de l'écran le signale après un START ; le toucher ouvre la
+page de téléchargement. Pour l'installer :
+
 1. Ouvrir à nouveau le lien d'installation (ou le QR code).
 2. Installer l'APK par-dessus l'ancien, sans désinstaller.
-3. Appuyer sur **START** : l'appli met la carte à jour toute seule.
 
 Les réglages de l'appli et de la carte sont conservés.
 
