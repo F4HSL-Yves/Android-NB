@@ -441,6 +441,31 @@ int main() {
         CHECK(r.final_state == nb::LockState::Locked, "final state");
     }
     {
+        // A friend's LNB further off still: the BPSK search (180 kHz in
+        // nbd, nine 25 kHz windows) reaches it, either side.
+        for (const double off : {-92000.0, 88000.0, 150000.0, -178000.0}) {
+            Scenario sc;
+            sc.bpsk = true;
+            sc.keyed = false;
+            sc.beacon_offset = 0.0;
+            sc.lnb_error0 = off;
+            sc.drift = 0.5;
+            sc.interferer_offset = 0.0;
+            sc.image_amp = 0.1;
+            sc.dc_guard = 0.0;
+            sc.search = 180000.0;
+            sc.ssb_offset = 30000.0;
+            sc.ssb_amp = 8.0;
+            const Result r = run(sc);
+            char name[48];
+            std::snprintf(name, sizeof name, "BPSK, LNB %+.0f kHz, SSB", off / 1000.0);
+            report(name, r);
+            CHECK(!r.wrong_lock, "wrong lock");
+            CHECK(r.lock_time > 0 && r.lock_time < 15.0, "lock time %.2f", r.lock_time);
+            CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+        }
+    }
+    {
         // Just after start the AD9363's IQ correction has not settled: the
         // beacon's mirror is briefly stronger than the beacon itself (seen
         // on the board: a lock at -21.9 kHz instead of +21.7 kHz).
