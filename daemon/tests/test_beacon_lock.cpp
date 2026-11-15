@@ -457,9 +457,9 @@ int main() {
         CHECK(r.final_state == nb::LockState::Locked, "final state");
     }
     {
-        // A friend's LNB further off still: the BPSK search (180 kHz in
-        // nbd, nine 25 kHz windows) reaches it, either side.
-        for (const double off : {-92000.0, 88000.0, 150000.0, -178000.0}) {
+        // A friend's LNB further off still: the BPSK search (100 kHz in
+        // nbd, five 25 kHz windows) reaches it, either side.
+        for (const double off : {-92000.0, 88000.0, 100000.0, -102000.0}) {
             Scenario sc;
             sc.bpsk = true;
             sc.keyed = false;
@@ -469,7 +469,7 @@ int main() {
             sc.interferer_offset = 0.0;
             sc.image_amp = 0.1;
             sc.dc_guard = 0.0;
-            sc.search = 180000.0;
+            sc.search = 100000.0;
             sc.ssb_offset = 30000.0;
             sc.ssb_amp = 8.0;
             const Result r = run(sc);
@@ -501,7 +501,7 @@ int main() {
             sc.drift = c.drift;
             sc.interferer_offset = 0.0;
             sc.dc_guard = 0.0;
-            sc.search = 180000.0;
+            sc.search = 100000.0;
             sc.cn0_dbhz = c.cn0;
             const Result r = run(sc);
             report(c.name, r);
@@ -531,7 +531,7 @@ int main() {
             sc.drift = 0.0;
             sc.interferer_offset = 0.0;
             sc.dc_guard = 0.0;
-            sc.search = 180000.0;
+            sc.search = 100000.0;
             sc.cn0_dbhz = c.cn0;
             sc.wobble_hz = c.wobble;
             sc.fm_walk = c.walk;

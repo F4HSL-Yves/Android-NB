@@ -58,7 +58,7 @@ struct Options {
     double center_hz = 10489750000.0;  // downlink frequency at the stream centre
     double freq_hz = 10489900000.0;    // station to demodulate (USB dial)
     double beacon_hz = 10489500000.0;  // CW beacon
-    double search_hz = 0.0;  // 0: 25 kHz for a CW beacon, 180 kHz for the BPSK one
+    double search_hz = 0.0;  // 0: 25 kHz for a CW beacon, 100 kHz for the BPSK one
     bool beacon_psk = false;
     std::string wisdom_dir;
     bool quiet = false;
@@ -119,7 +119,7 @@ void usage() {
                  "  --center HZ      downlink frequency at the stream centre (default 10489750000)\n"
                  "  --freq HZ        USB dial frequency to demodulate (default 10489900000)\n"
                  "  --beacon HZ      CW beacon frequency (default 10489500000)\n"
-                 "  --search HZ      beacon search half width (default 25000 CW, 180000 BPSK)\n"
+                 "  --search HZ      beacon search half width (default 25000 CW, 100000 BPSK)\n"
                  "  --beacon-psk     the beacon is BPSK (automatic for 10489750000)\n"
                  "  --output FILE    48 kHz mono s16le audio, '-' for stdout\n"
                  "  --wisdom DIR     cache FFTW plans in DIR (recommended on the board)\n"
@@ -320,7 +320,7 @@ int main(int argc, char** argv) {
     // The squared BPSK line stands out from SSB stations, so its search can
     // be wide enough for LNBs far off (+34 kHz seen); a wide CW search
     // would take in CW stations.
-    auto search_for = [&](bool bpsk) { return o.search_hz > 0 ? o.search_hz : bpsk ? 180000.0 : 25000.0; };
+    auto search_for = [&](bool bpsk) { return o.search_hz > 0 ? o.search_hz : bpsk ? 100000.0 : 25000.0; };
     // The centre beacon is BPSK (no carrier): lock on its square.
     cfg.bpsk = o.beacon_psk || std::abs(o.beacon_hz - 10489750000.0) < 1000.0;
     cfg.search_half_width_hz = search_for(cfg.bpsk);
