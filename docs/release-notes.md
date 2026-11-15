@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.23
+
+- **Balise PSK moins souvent perdue avec un LNB qui dérive vite** : le suivi suit maintenant la balise 2,5 fois plus vite et tolère un glissement plus brusque (vu chez un utilisateur : balise retrouvée, puis perdue de temps en temps). Le suivi de la balise CW ne change pas.
+
 ## Nouveautés de la v1.22
 
 - **Synchro PSK retrouvée avec une balise faible ou un LNB qui dérive** : le filtre anti-SSB de la v1.20 exigeait une raie parfaitement propre et rejetait la vraie balise dès qu'elle était un peu faible, ou qu'elle avait glissé depuis la recherche (vu chez un utilisateur : balise bien visible à −74 kHz, jamais synchronisée). Le candidat est maintenant confirmé par une seconde d'écoute fine autour de lui : une raie nette, et un niveau stable (une voix SSB va et vient, la balise non).

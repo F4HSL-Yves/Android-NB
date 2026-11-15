@@ -14,7 +14,7 @@ constexpr double kZeta = 0.707;
 constexpr double kCoherenceGate = 0.7;
 // Largest per-block error the loop accepts while locked, in Hz. Anything
 // bigger is a passing signal, not the beacon moving.
-constexpr double kMaxLockedErrorHz = 25.0;
+constexpr double kMaxLockedErrorHz = 60.0;
 constexpr double kMaxReacquireErrorHz = 100.0;
 // BPSK acquisition: a candidate whose plain (unsquared) spectrum peak
 // stands this far above its 50..300 Hz surroundings is a carrier, not the
@@ -39,7 +39,7 @@ constexpr double kConfirmDb = 15.0;
 constexpr double kMaxEnvelopeSpread = 0.3;
 // A beacon drifts a few Hz per second (a LNB without PLL warming up,
 // maybe 20). A loop running faster follows something else: search again.
-constexpr double kMaxDriftHzPerS = 40.0;
+constexpr double kMaxDriftHzPerS = 150.0;
 // Candidates closer than this are taken as the same signal (a voice
 // station's squared spectrum is a cluster of lines; the beacon's one line
 // spans a few Hz at most).
@@ -99,7 +99,9 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     block_len_ = static_cast<unsigned>(std::lround(trk_rate_ * 0.04));
     if (block_len_ < 4) block_len_ = 4;
 
-    const double wn = 2.0 * kPi * cfg_.loop_natural_hz;
+    const double loop_hz = cfg_.loop_natural_hz > 0.0 ? cfg_.loop_natural_hz
+                                                     : (cfg_.bpsk ? 0.5 : 0.2);
+    const double wn = 2.0 * kPi * loop_hz;
     const double dt = block_len_ / trk_rate_;
     k1_ = 2.0 * kZeta * wn * dt;
     k2_ = wn * wn * dt;
