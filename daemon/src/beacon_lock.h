@@ -70,6 +70,14 @@ struct BeaconLockConfig {
     // the signal is squared before the measurements, which wipes the
     // modulation and leaves a line at twice its frequency.
     bool bpsk = false;
+    // Where the beacon was found last time (a correction, Hz, as
+    // correction_hz() reports it), when has_hint: the first acquisition
+    // looks in one window around it and locks on a clear peak within
+    // kHintRadiusHz of it, without sweeping the whole search first. Nothing
+    // there (or a candidate that fails the BPSK check): the usual sweep.
+    // Until a lock, correction_hz() reports the hint.
+    bool has_hint = false;
+    double hint_hz = 0.0;
 };
 
 enum class LockState { Searching, Locked, Holdover };
@@ -113,6 +121,7 @@ private:
     void confirm();
     void lock_best();     // track the strongest candidate left, or search again
     void back_to_search();
+    bool hint_acquisition();  // true when it handled this acquisition
 
     BeaconLockConfig cfg_;
     LockState state_ = LockState::Searching;
@@ -134,6 +143,7 @@ private:
     size_t acq_fft_size_ = 0;
     std::vector<cf> acq_buf_;
     double acq_snr_db_ = 0.0;
+    bool hint_window_ = false;  // the next acquisition looks around cfg_.hint_hz
 
     // Tracking chain.
     Nco trk_nco_;

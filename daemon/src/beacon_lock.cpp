@@ -26,6 +26,10 @@ constexpr double kBeaconHumpDb = 3.0;
 // Peaks of one acquisition window tried in turn, strongest first.
 constexpr size_t kMaxCandidates = 6;
 constexpr size_t kMaxTries = 48;
+// A hinted acquisition only takes a peak this close to the hint: the LNB
+// moves by a few kHz between two sessions (temperature), and anything
+// further is left to the full sweep, which compares the whole search.
+constexpr double kHintRadiusHz = 5000.0;
 // BPSK: a new lock is confirmed on ~1 s of the tracking chain's first
 // stage (8 kS/s, 700 Hz around the candidate) before it is reported:
 // - squared, it must show one line kConfirmDb above the band's noise,
@@ -107,6 +111,11 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     k2_ = wn * wn * dt;
 
     freq_ = cfg_.beacon_offset_hz;
+    if (cfg_.has_hint && std::abs(cfg_.hint_hz) <= cfg_.search_half_width_hz) {
+        freq_ += cfg_.hint_hz;
+        hint_window_ = true;
+        acq_nco_.set_frequency(cfg_.beacon_offset_hz + cfg_.hint_hz);
+    }
     good_freq_ = freq_;
 }
 
@@ -132,6 +141,7 @@ void BeaconLock::set_acq_window(size_t index) {
 }
 
 void BeaconLock::run_acquisition() {
+    if (hint_window_ && hint_acquisition()) return;
     const size_t before = sweep_.size();
     acquire_at(cfg_.beacon_offset_hz + acq_centres_[acq_index_], sweep_);
     if (sweep_.size() == before) sweep_snr_db_ = std::max(sweep_snr_db_, acq_snr_db_);
@@ -160,6 +170,28 @@ void BeaconLock::run_acquisition() {
     acq_snr_db_ = pending_.empty() ? sweep_snr_db_ : pending_.front().snr_db;
     sweep_snr_db_ = -100.0;
     lock_best();
+}
+
+bool BeaconLock::hint_acquisition() {
+    hint_window_ = false;  // one try: afterwards, the usual sweeps
+    std::vector<Candidate> found;
+    acquire_at(cfg_.beacon_offset_hz + cfg_.hint_hz, found);
+    // The next acquisition starts the normal sweep, from its first window.
+    set_acq_window(0);
+    acq_buf_.clear();
+    acq_fir_.reset();
+    pending_.clear();
+    for (const Candidate& c : found) {
+        if (std::abs(c.freq_hz - (cfg_.beacon_offset_hz + cfg_.hint_hz)) > kHintRadiusHz) continue;
+        bool seen = false;
+        for (const Candidate& p : pending_) seen = seen || std::abs(p.freq_hz - c.freq_hz) < kSameSignalHz;
+        if (!seen) pending_.push_back(c);
+    }
+    if (pending_.empty()) return true;  // nothing near the hint: sweep
+    std::stable_sort(pending_.begin(), pending_.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.snr_db > b.snr_db; });
+    lock_best();
+    return true;
 }
 
 void BeaconLock::lock_best() {

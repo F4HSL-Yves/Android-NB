@@ -48,6 +48,8 @@ struct Scenario {
     double wobble_hz = 0.0;            // LNB error swinging by +/- this (thermostat, sun)...
     double wobble_period = 60.0;       // ...over this many seconds
     double fm_walk = 0.0;              // LNB frequency random walk, Hz per sqrt(s)
+    bool has_hint = false;             // BeaconLockConfig::has_hint / hint_hz
+    double hint = 0.0;
 };
 
 // A USB voice station: a pitch (90..180 Hz, steady within a syllable,
@@ -131,6 +133,8 @@ Result run(const Scenario& sc) {
     cfg.bpsk = sc.bpsk;
     cfg.dc_guard_hz = sc.dc_guard;
     if (sc.search > 0) cfg.search_half_width_hz = sc.search;
+    cfg.has_hint = sc.has_hint;
+    cfg.hint_hz = sc.hint;
     nb::BeaconLock lock(cfg);
     std::uniform_int_distribution<int> bit(0, 1);
     double symbol = 1.0;
@@ -591,6 +595,82 @@ int main() {
         report("CW, strong image at start", r);
         CHECK(!r.wrong_lock, "locked on the image");
         CHECK(r.rms_error < 1.0, "rms %.3f", r.rms_error);
+    }
+
+    {
+        // nbd's BPSK search (+/-100 kHz) sweeps five windows before it locks.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.search = 100000.0;
+        sc.lnb_error0 = 24700.0;
+        sc.interferer_offset = 0.0;
+        const Result r = run(sc);
+        report("BPSK +/-100 kHz, no hint", r);
+        CHECK(!r.wrong_lock, "wrong lock");
+        CHECK(r.lock_time > 0 && r.lock_time < 10.0, "lock time %.2f", r.lock_time);
+        // The LNB moved by 1.8 kHz since the last session: the hint finds it at once.
+        sc.has_hint = true;
+        sc.hint = 22900.0;
+        const Result h = run(sc);
+        report("BPSK +/-100 kHz, hint 1.8 kHz off", h);
+        CHECK(!h.wrong_lock, "wrong lock");
+        CHECK(h.lock_time > 0 && h.lock_time < 3.0, "lock time %.2f", h.lock_time);
+        CHECK(h.lock_time < r.lock_time, "hint not faster (%.2f vs %.2f)", h.lock_time, r.lock_time);
+        CHECK(h.rms_error < 1.5, "rms %.3f", h.rms_error);
+        CHECK(h.final_state == nb::LockState::Locked, "final state");
+    }
+    {
+        // A stale hint (other LNB): one window for nothing, then the sweep.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.search = 100000.0;
+        sc.lnb_error0 = -31000.0;
+        sc.interferer_offset = 0.0;
+        sc.has_hint = true;
+        sc.hint = 40000.0;
+        const Result r = run(sc);
+        report("BPSK, stale hint 71 kHz off", r);
+        CHECK(!r.wrong_lock, "wrong lock");
+        CHECK(r.lock_time > 0 && r.lock_time < 12.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.5, "rms %.3f", r.rms_error);
+        CHECK(r.final_state == nb::LockState::Locked, "final state");
+    }
+    {
+        // Hint 3 kHz off, an SSB voice near it: the BPSK check rejects the
+        // voice and the beacon is still found.
+        Scenario sc;
+        sc.bpsk = true;
+        sc.keyed = false;
+        sc.search = 100000.0;
+        sc.lnb_error0 = 12000.0;
+        sc.interferer_offset = 0.0;
+        sc.ssb_offset = -250000.0 + 15000.0 + 1500.0;
+        sc.ssb_amp = 3.0;
+        sc.has_hint = true;
+        sc.hint = 15000.0;
+        const Result r = run(sc);
+        report("BPSK, hint near a voice", r);
+        CHECK(!r.wrong_lock, "wrong lock");
+        CHECK(r.lock_time > 0 && r.lock_time < 12.0, "lock time %.2f", r.lock_time);
+        CHECK(r.final_state == nb::LockState::Locked, "final state");
+    }
+    {
+        // CW with a hint: same lock as without, and the hint shows before it.
+        Scenario sc;
+        sc.lnb_error0 = -9000.0;
+        sc.has_hint = true;
+        sc.hint = -8000.0;
+        const Result r = run(sc);
+        report("CW, hint 1 kHz off", r);
+        CHECK(!r.wrong_lock, "wrong lock");
+        CHECK(r.lock_time > 0 && r.lock_time < 3.0, "lock time %.2f", r.lock_time);
+        CHECK(r.rms_error < 1.0, "rms %.3f", r.rms_error);
+        nb::BeaconLockConfig cfg;
+        cfg.has_hint = true;
+        cfg.hint_hz = -8000.0;
+        CHECK(std::abs(nb::BeaconLock(cfg).correction_hz() + 8000.0) < 1e-6, "hint not reported before the lock");
     }
 
     if (failures) {
