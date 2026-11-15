@@ -45,6 +45,9 @@ struct Scenario {
     double spur_amp = 0.0;             // its amplitude (0 = none)
     double ssb_offset = 0.0;           // SSB voice station, suppressed carrier Hz from centre
     double ssb_amp = 0.0;              // its peak amplitude (0 = none)
+    double wobble_hz = 0.0;            // LNB error swinging by +/- this (thermostat, sun)...
+    double wobble_period = 60.0;       // ...over this many seconds
+    double fm_walk = 0.0;              // LNB frequency random walk, Hz per sqrt(s)
 };
 
 // A USB voice station: a pitch (90..180 Hz, steady within a syllable,
@@ -96,6 +99,8 @@ private:
 };
 
 struct Result {
+    int losses = 0;                    // back to searching after the first lock
+    double unlocked_s = 0.0;           // time not locked after the first lock
     double rms_error = 0.0;
     double max_error = 0.0;
     double lock_time = -1.0;
@@ -140,6 +145,11 @@ Result run(const Scenario& sc) {
     std::vector<nb::cf> buf(block);
     double ph_b = 0.0, ph_i = 0.0, ph_s = 0.0, ph_v = 0.0;
     SsbVoice voice(sc.fs);
+    std::mt19937 walk_rng(777);
+    std::normal_distribution<double> walk_gauss(0.0, 1.0);
+    const double walk_step = sc.fm_walk / std::sqrt(sc.fs);
+    double walk = 0.0, truth = sc.lnb_error0;
+    nb::LockState prev_state = nb::LockState::Searching;
     double sum_sq = 0.0, max_err = 0.0;
     size_t n_err = 0;
     Result r;
@@ -147,7 +157,10 @@ Result run(const Scenario& sc) {
     for (size_t pos = 0; pos < total; pos += block) {
         for (size_t i = 0; i < block; ++i) {
             const double t = (pos + i) / sc.fs;
-            const double err = sc.lnb_error0 + sc.drift * t;
+            walk += walk_step * walk_gauss(walk_rng);
+            const double err = sc.lnb_error0 + sc.drift * t + walk +
+                               sc.wobble_hz * std::sin(2.0 * kPi * t / sc.wobble_period);
+            truth = err;
             const double fb = sc.beacon_offset + err;
             ph_b += 2.0 * kPi * fb / sc.fs;
             ph_i += 2.0 * kPi * (fb + sc.interferer_offset) / sc.fs;
@@ -195,13 +208,16 @@ Result run(const Scenario& sc) {
         const auto st = lock.status();
         if (st.state == nb::LockState::Locked && r.lock_time < 0) r.lock_time = t;
         if (st.state == nb::LockState::Holdover) r.holdover_seen = true;
+        if (r.lock_time > 0 && st.state == nb::LockState::Searching && prev_state != nb::LockState::Searching) ++r.losses;
+        if (r.lock_time > 0 && st.state != nb::LockState::Locked) r.unlocked_s += block / sc.fs;
+        prev_state = st.state;
         if (st.state != nb::LockState::Searching &&
-            std::abs(st.correction_hz - (sc.lnb_error0 + sc.drift * t)) > 1000.0)
+            std::abs(st.correction_hz - truth) > 1000.0)
             r.wrong_lock = true;
         const bool outage = t >= sc.outage_from && t < sc.outage_to;
         if (outage && t > sc.outage_from + 6.0 && st.state == nb::LockState::Locked) r.locked_in_outage = true;
         if (t > 15.0 && st.state != nb::LockState::Searching) {
-            const double e = st.correction_hz - (sc.lnb_error0 + sc.drift * t);
+            const double e = st.correction_hz - truth;
             sum_sq += e * e;
             max_err = std::max(max_err, std::abs(e));
             ++n_err;
@@ -493,6 +509,39 @@ int main() {
             CHECK(r.lock_time > 0 && r.lock_time < 15.0, "lock time %.2f", r.lock_time);
             CHECK(r.rms_error < 3.0, "rms %.3f", r.rms_error);
             CHECK(r.final_state == nb::LockState::Locked, "final state");
+        }
+    }
+    {
+        // At the same friend's, after v1.22: the beacon still got lost now
+        // and then. A LNB without PLL does not drift steadily: its error
+        // swings (thermostat, sun, wind) and wanders. The loop must follow
+        // it without letting go.
+        const struct { double cn0, wobble, walk; const char* name; } cases[] = {
+            {50.0, 1000.0, 0.0, "BPSK, LNB swinging +/-1 kHz / 60 s"},
+            {50.0, 0.0, 20.0, "BPSK, LNB wandering 20 Hz/sqrt(s)"},
+            {40.0, 1000.0, 0.0, "weak BPSK, LNB swinging"},
+            {40.0, 0.0, 20.0, "weak BPSK, LNB wandering"},
+        };
+        for (const auto& c : cases) {
+            Scenario sc;
+            sc.bpsk = true;
+            sc.keyed = false;
+            sc.beacon_offset = 0.0;
+            sc.lnb_error0 = -74000.0;
+            sc.drift = 0.0;
+            sc.interferer_offset = 0.0;
+            sc.dc_guard = 0.0;
+            sc.search = 180000.0;
+            sc.cn0_dbhz = c.cn0;
+            sc.wobble_hz = c.wobble;
+            sc.fm_walk = c.walk;
+            sc.seconds = 180.0;
+            const Result r = run(sc);
+            report(c.name, r);
+            CHECK(!r.wrong_lock, "wrong lock");
+            CHECK(r.lock_time > 0 && r.lock_time < 25.0, "lock time %.2f", r.lock_time);
+            CHECK(r.losses == 0, "%d losses, %.0f s unlocked", r.losses, r.unlocked_s);
+            CHECK(r.rms_error < 10.0, "rms %.3f", r.rms_error);
         }
     }
     {

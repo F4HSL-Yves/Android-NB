@@ -46,8 +46,10 @@ struct BeaconLockConfig {
     // Minimum peak-to-median ratio to accept an acquisition, in dB.
     double acquisition_snr_db = 12.0;
     // Natural frequency of the tracking loop, in Hz. Lower = smoother,
-    // higher = follows faster drift.
-    double loop_natural_hz = 0.2;
+    // higher = follows faster drift. 0 = default for the mode: 0.5 Hz for
+    // the BPSK beacon (LNBs that drift fast), 0.2 Hz for CW (coasts better
+    // through a beacon outage).
+    double loop_natural_hz = 0.0;
     // Seconds without a coherent block before reporting holdover,
     // and before going back to a full search.
     double holdover_after_s = 5.0;
