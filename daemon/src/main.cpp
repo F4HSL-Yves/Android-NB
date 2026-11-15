@@ -59,6 +59,7 @@ struct Options {
     double freq_hz = 10489900000.0;    // station to demodulate (USB dial)
     double beacon_hz = 10489500000.0;  // CW beacon
     double search_hz = 0.0;  // 0: 25 kHz for a CW beacon, 100 kHz for the BPSK one
+    std::string lnb_file;    // last LNB correction, read at start, written while locked
     bool beacon_psk = false;
     std::string wisdom_dir;
     bool quiet = false;
@@ -83,6 +84,28 @@ struct Options {
     double tx_max_s = 600.0;
     std::string mqtt_host;  // Arduino PTT off when nbd stops a transmission itself
 };
+
+// The LNB correction (Hz) kept in --lnb-file: one number, as text.
+bool read_correction(const std::string& path, double& hz) {
+    if (path.empty()) return false;
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return false;
+    const bool ok = std::fscanf(f, "%lf", &hz) == 1 && std::abs(hz) < 1e6;
+    std::fclose(f);
+    return ok;
+}
+
+// Written beside it, then renamed: a power cut never leaves half a number.
+void write_correction(const std::string& path, double hz) {
+    if (path.empty()) return;
+    const std::string tmp = path + ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "w");
+    if (!f) return;
+    std::fprintf(f, "%.0f\n", hz);
+    const bool ok = std::fflush(f) == 0 && fsync(fileno(f)) == 0;
+    std::fclose(f);
+    if (ok) std::rename(tmp.c_str(), path.c_str());
+}
 
 std::atomic<bool> g_stop{false};
 void on_signal(int) { g_stop = true; }
@@ -120,6 +143,8 @@ void usage() {
                  "  --freq HZ        USB dial frequency to demodulate (default 10489900000)\n"
                  "  --beacon HZ      CW beacon frequency (default 10489500000)\n"
                  "  --search HZ      beacon search half width (default 25000 CW, 100000 BPSK)\n"
+                 "  --lnb-file PATH  remember the LNB correction there: the next start looks\n"
+                 "                   for the beacon around it first, and locks in a second or two\n"
                  "  --beacon-psk     the beacon is BPSK (automatic for 10489750000)\n"
                  "  --output FILE    48 kHz mono s16le audio, '-' for stdout\n"
                  "  --wisdom DIR     cache FFTW plans in DIR (recommended on the board)\n"
@@ -144,6 +169,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--freq") o.freq_hz = std::atof(next("--freq"));
         else if (a == "--beacon") o.beacon_hz = std::atof(next("--beacon"));
         else if (a == "--search") o.search_hz = std::atof(next("--search"));
+        else if (a == "--lnb-file") o.lnb_file = next("--lnb-file");
         else if (a == "--beacon-psk") o.beacon_psk = true;
         else if (a == "--wisdom") o.wisdom_dir = next("--wisdom");
         else if (a == "--quiet") o.quiet = true;
@@ -327,6 +353,14 @@ int main(int argc, char** argv) {
     // Live from the board, the AD9363 LO (and its leakage) is lo_offset
     // away from the stream centre: no carrier to keep out there.
     if (live && std::abs(o.pluto.lo_offset_hz) > o.rate / 2) cfg.dc_guard_hz = 0.0;
+    // The correction is the LNB's (and the board's) error, the same for
+    // every beacon: the last one found is where to look first.
+    double saved_correction = 0.0;
+    if (read_correction(o.lnb_file, saved_correction)) {
+        cfg.has_hint = true;
+        cfg.hint_hz = saved_correction;
+        if (!o.quiet) std::fprintf(stderr, "nbd: last LNB correction %+.0f Hz, searching there first\n", saved_correction);
+    }
     if (!o.quiet) std::fprintf(stderr, "nbd: beacon lock on %.3f MHz (%s)\n", o.beacon_hz / 1e6, cfg.bpsk ? "BPSK" : "CW");
     if (std::abs(cfg.beacon_offset_hz) + cfg.search_half_width_hz > o.rate / 2) {
         std::fprintf(stderr, "nbd: the beacon search window falls outside the IQ bandwidth\n");
@@ -484,6 +518,11 @@ int main(int argc, char** argv) {
                 }
                 if (std::abs(c.a - o.beacon_hz) < 1.0) break;  // already on it
                 o.beacon_hz = c.a;
+                // Same LNB, other beacon: start from what the old lock knew.
+                if (lock->state() != nb::LockState::Searching) {
+                    bc.has_hint = true;
+                    bc.hint_hz = lock->correction_hz();
+                }
                 cfg = bc;
                 lock = std::make_unique<nb::BeaconLock>(cfg);
                 if (!o.quiet)
@@ -576,6 +615,19 @@ int main(int argc, char** argv) {
     double next_report = 1.0;
     const uint64_t max_samples = o.duration_s > 0 ? static_cast<uint64_t>(o.duration_s * o.rate) : UINT64_MAX;
     int exit_code = 0;
+    // --lnb-file: written once locked, then at most once a minute and only
+    // when it moved by kSaveStepHz (the file is on the SD card), and at exit.
+    constexpr double kSaveStepHz = 300.0;
+    double next_save_t = 10.0;
+    bool have_saved = cfg.has_hint;
+    auto save_correction = [&]() {
+        if (o.lnb_file.empty() || lock->state() != nb::LockState::Locked) return;
+        const double c = lock->correction_hz();
+        if (have_saved && std::abs(c - saved_correction) < kSaveStepHz) return;
+        write_correction(o.lnb_file, c);
+        saved_correction = c;
+        have_saved = true;
+    };
     // Seconds of IQ since an app was last connected (counted from the start).
     double idle_since_t = 0.0;
     auto next_block = [&]() -> bool {
@@ -677,6 +729,11 @@ int main(int argc, char** argv) {
             exit_code = 3;
             break;
         }
+        if (t >= next_save_t) {
+            // Every 5 s until it is locked, then once a minute.
+            next_save_t = t + (lock->state() == nb::LockState::Locked ? 60.0 : 5.0);
+            save_correction();
+        }
         if (t >= next_report) {
             next_report += 1.0;
             const auto st = lock->status();
@@ -709,6 +766,7 @@ int main(int argc, char** argv) {
                              rx.signal_db(), ws ? ("  clients " + std::to_string(ws->clients())).c_str() : "");
         }
     }
+    save_correction();
     const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
     if (!o.quiet && wall > 0.0) {
         // On a file this measures the CPU margin: above 1x, the board keeps up.

@@ -22,8 +22,9 @@
 # datv, so the two never fight; the matching stop switches back to nb.
 #
 # Files live on the SD card (the root filesystem is in RAM and jffs2 is
-# almost full): /boot/nb/nbd, nb.conf, this script, the FFTW wisdom and the
-# remembered mode. nbd is copied to /tmp to run, so a vfat mount option
+# almost full): /boot/nb/nbd, nb.conf, this script, the FFTW wisdom, the
+# remembered mode and the last LNB correction (lnb_correction: nbd looks for
+# the beacon around it first, so a START locks in a second or two). nbd is copied to /tmp to run, so a vfat mount option
 # cannot stop it from executing.
 
 NB_DIR=${NB_DIR:-/boot/nb}
@@ -80,7 +81,8 @@ start_nb() {
         while mine; do
             echo "--- nbd start $(date)" >>"$LOG"
             rc=0
-            /tmp/nbd $NBD_ARGS --idle-exit "$NB_IDLE_EXIT" --wisdom "$NB_DIR/" --quiet >>"$LOG" 2>&1 || rc=$?
+            /tmp/nbd $NBD_ARGS --idle-exit "$NB_IDLE_EXIT" --wisdom "$NB_DIR/" --lnb-file "$NB_DIR/lnb_correction" \
+                --quiet >>"$LOG" 2>&1 || rc=$?
             if [ "$rc" = 3 ] && mine; then
                 log "no app connected for ${NB_IDLE_EXIT} s: radio given back"
                 switch datv

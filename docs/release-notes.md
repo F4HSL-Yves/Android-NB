@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.25
+
+- **Synchro de la balise en 1 à 2 secondes au START** : la carte retient la dernière correction du LNB (fichier `lnb_correction` sur la carte SD) et cherche d'abord la balise autour d'elle. Avec la balise PSK, le verrouillage prend environ 2 secondes au lieu de 6. Si le LNB a changé ou trop dérivé, la recherche complète habituelle prend le relais : au pire une seconde de plus qu'avant. Un changement de balise repart aussi de la correction déjà trouvée. Aucune mise à jour des applis n'est nécessaire : elles installent la nouvelle version sur la carte au START suivant.
+
 ## Nouveautés de la v1.24
 
 - **Synchro PSK plus rapide** : la balise est cherchée à ±100 kHz (±180 kHz en v1.21 à v1.23). Le premier verrouillage prend environ 5 secondes au lieu d'une dizaine. Un LNB décalé de plus de 100 kHz n'est plus synchronisé.

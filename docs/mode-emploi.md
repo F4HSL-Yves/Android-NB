@@ -102,7 +102,7 @@ De haut en bas :
 | Zone | Rôle |
 | --- | --- |
 | **?** | À côté du titre : ouvre ce mode d'emploi dans le navigateur. |
-| **Badges** | Le badge balise donne la balise suivie (basse, PSK ou haute) et son état. « ✓ » : verrouillée (vert). « ~ » : perdue, la dernière correction est gardée (orange). « ? » : recherche en cours (rouge). Touchez-le pour choisir la balise de synchro : basse (CW, 10489,500), PSK (10489,750) ou haute (10490,000). Après un changement, la carte recherche la nouvelle balise pendant quelques secondes. À côté, l'état de la liaison : connecté, connexion… ou arrêté. |
+| **Badges** | Le badge balise donne la balise suivie (basse, PSK ou haute) et son état. « ✓ » : verrouillée (vert). « ~ » : perdue, la dernière correction est gardée (orange). « ? » : recherche en cours (rouge). Touchez-le pour choisir la balise de synchro : basse (CW, 10489,500), PSK (10489,750) ou haute (10490,000). Après un changement, la carte recherche la nouvelle balise pendant quelques secondes. Au START, la carte cherche d'abord la balise autour de la dernière correction LNB retenue : le verrouillage prend alors une ou deux secondes. À côté, l'état de la liaison : connecté, connexion… ou arrêté. |
 | **Ligne de message** | Problème en cours, en rouge (MQTT injoignable, réception DATV en cours, erreur d'installation…). |
 | **Spectre et waterfall** | Toute la bande ou un zoom. Le trait rouge marque la fréquence d'écoute, la zone claire la bande passante du filtre. |
 | **Vue** | Bande entière, 100 k, 25 k ou 6 k. |
