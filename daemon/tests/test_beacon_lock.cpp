@@ -466,6 +466,36 @@ int main() {
         }
     }
     {
+        // Seen at a friend's (v1.20, v1.21): the PSK beacon 74 kHz below,
+        // clearly visible, never locked. The check against voice stations
+        // wanted a clean line in nearly every 40 ms block, which a weaker
+        // beacon, or one that had drifted since its window was swept,
+        // fails. Weak, drifting or both, it must lock.
+        const struct { double cn0, drift; const char* name; } cases[] = {
+            {38.0, 0.3, "weak BPSK (38 dB-Hz), LNB -74 kHz"},
+            {50.0, 15.0, "BPSK, LNB -74 kHz drifting 15 Hz/s"},
+            {40.0, 8.0, "weak BPSK, LNB -74 kHz drifting"},
+        };
+        for (const auto& c : cases) {
+            Scenario sc;
+            sc.bpsk = true;
+            sc.keyed = false;
+            sc.beacon_offset = 0.0;
+            sc.lnb_error0 = -74000.0;
+            sc.drift = c.drift;
+            sc.interferer_offset = 0.0;
+            sc.dc_guard = 0.0;
+            sc.search = 180000.0;
+            sc.cn0_dbhz = c.cn0;
+            const Result r = run(sc);
+            report(c.name, r);
+            CHECK(!r.wrong_lock, "wrong lock");
+            CHECK(r.lock_time > 0 && r.lock_time < 15.0, "lock time %.2f", r.lock_time);
+            CHECK(r.rms_error < 3.0, "rms %.3f", r.rms_error);
+            CHECK(r.final_state == nb::LockState::Locked, "final state");
+        }
+    }
+    {
         // Just after start the AD9363's IQ correction has not settled: the
         // beacon's mirror is briefly stronger than the beacon itself (seen
         // on the board: a lock at -21.9 kHz instead of +21.7 kHz).

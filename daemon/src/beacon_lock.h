@@ -23,8 +23,9 @@
 // first, wider stage; measured frequencies are halved.
 // A voice station squared also shows lines, between its harmonics, that
 // can win an acquisition: with BPSK every peak of the sweep is kept, and a
-// new lock only counts once its line has stayed put for about a second;
-// otherwise the next peak is tried.
+// new lock only counts once a second of listening around it shows one
+// clean line at a steady level (a voice comes and goes); otherwise the
+// next peak is tried.
 #pragma once
 
 #include <cstddef>
@@ -107,6 +108,7 @@ private:
     void loop_update(double error_hz);
     void coast(double dt);
     void enter_tracking(double beacon_freq_hz);
+    void confirm();
     void lock_best();     // track the strongest candidate left, or search again
     void back_to_search();
 
@@ -143,11 +145,15 @@ private:
     double prod_mag_ = 0.0;
     unsigned block_count_ = 0;
     unsigned block_len_ = 40;
-    // BPSK: a fresh lock is only reported once its line has stayed put.
+    // BPSK: a fresh lock is only reported once confirmed (see confirm()).
     // A voice station squared also gives lines, between its harmonics,
-    // that can win an acquisition but move with each syllable.
+    // that can win an acquisition.
     bool verifying_ = false;
-    unsigned verify_blocks_ = 0, verify_coherent_ = 0;
+    std::vector<cf> confirm_buf_;     // squared first-stage samples
+    std::vector<double> confirm_env_; // first-stage power, per 40 ms
+    double env_acc_ = 0.0;
+    unsigned env_count_ = 0, env_block_ = 320, trk_d1_ = 96;
+    size_t confirm_len_ = 8448;
     double good_freq_ = 0.0;  // last verified position, reported while searching again
 
     // Loop state.

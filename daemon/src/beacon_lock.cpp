@@ -26,15 +26,20 @@ constexpr double kBeaconHumpDb = 3.0;
 // Peaks of one acquisition window tried in turn, strongest first.
 constexpr size_t kMaxCandidates = 6;
 constexpr size_t kMaxTries = 48;
-// BPSK: a new lock is checked over this many tracking blocks (40 ms
-// each) and kept when at least kVerifyCoherent of them saw a clean line
-// close to the estimate. The beacon passes all of them at any usable
-// level; a voice station's squared lines last a syllable at best.
-constexpr unsigned kVerifyBlocks = 30;
-constexpr unsigned kVerifyCoherent = 21;
-// A beacon (LNB warming, SDR reference) drifts a few Hz per second at
-// most. A loop running faster follows something else: search again.
-constexpr double kMaxDriftHzPerS = 8.0;
+// BPSK: a new lock is confirmed on ~1 s of the tracking chain's first
+// stage (8 kS/s, 700 Hz around the candidate) before it is reported:
+// - squared, it must show one line kConfirmDb above the band's noise,
+//   within kConfirmSpanHz of the candidate (whose window may have been
+//   swept seconds ago, with the LNB drifting since);
+// - unsquared, its power, measured every 40 ms, must stay steady: the
+//   beacon (and noise) does not change level, a voice comes and goes.
+constexpr double kConfirmSeconds = 1.0;
+constexpr double kConfirmSpanHz = 300.0;
+constexpr double kConfirmDb = 15.0;
+constexpr double kMaxEnvelopeSpread = 0.3;
+// A beacon drifts a few Hz per second (a LNB without PLL warming up,
+// maybe 20). A loop running faster follows something else: search again.
+constexpr double kMaxDriftHzPerS = 40.0;
 // Candidates closer than this are taken as the same signal (a voice
 // station's squared spectrum is a cluster of lines; the beacon's one line
 // spans a few Hz at most).
@@ -82,6 +87,9 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     unsigned d1 = static_cast<unsigned>(std::lround(fs / 8000.0));
     if (d1 < 1) d1 = 1;
     const double rate1 = fs / d1;
+    trk_d1_ = d1;
+    confirm_len_ = static_cast<size_t>(rate1 * kConfirmSeconds) + 256;
+    env_block_ = static_cast<unsigned>(std::lround(rate1 * 0.04));
     unsigned d2 = static_cast<unsigned>(std::lround(rate1 / 1000.0));
     if (d2 < 1) d2 = 1;
     trk_rate_ = rate1 / d2;
@@ -323,8 +331,65 @@ void BeaconLock::enter_tracking(double beacon_freq_hz) {
     last_carrier_sample_ = samples_;
     state_ = LockState::Locked;
     verifying_ = cfg_.bpsk;
-    verify_blocks_ = 0;
-    verify_coherent_ = 0;
+    confirm_buf_.clear();
+    confirm_env_.clear();
+    env_acc_ = 0.0;
+    env_count_ = 0;
+}
+
+void BeaconLock::confirm() {
+    const double rate1 = cfg_.sample_rate / trk_d1_;
+    size_t len = 1;
+    while (len < confirm_buf_.size()) len <<= 1;
+    len >>= 1;  // the newest power of two that fits
+    std::vector<std::complex<double>> spec(len);
+    const size_t skip = confirm_buf_.size() - len;  // drop the filter's start
+    for (size_t i = 0; i < len; ++i) {
+        const double hann = 0.5 - 0.5 * std::cos(2.0 * kPi * i / (len - 1));
+        const cf z = confirm_buf_[skip + i];
+        spec[i] = std::complex<double>(z.real(), z.imag()) * hann;
+    }
+    confirm_buf_.clear();
+    fft_inplace(spec);
+    const double bin_hz = rate1 / len;
+    auto pw = [&](long k) { return std::norm(spec[static_cast<size_t>((k + static_cast<long>(len)) % static_cast<long>(len))]); };
+    // Noise: the squared 700 Hz band (it spans twice that).
+    const long nb = static_cast<long>(1200.0 / bin_hz);
+    std::vector<double> noise;
+    for (long k = -nb; k <= nb; ++k) noise.push_back(pw(k));
+    std::nth_element(noise.begin(), noise.begin() + noise.size() / 2, noise.end());
+    const double median = std::max(noise[noise.size() / 2], 1e-30);
+    const long span = static_cast<long>(std::ceil(2.0 * kConfirmSpanHz / bin_hz));
+    long best = 0;
+    for (long k = -span; k <= span; ++k)
+        if (pw(k) > pw(best)) best = k;
+    const double snr_db = 10.0 * std::log10(pw(best) / median);
+
+    // Envelope: spread (std / mean) of the 40 ms block powers.
+    double sum = 0.0, sum2 = 0.0;
+    for (const double p : confirm_env_) {
+        sum += p;
+        sum2 += p * p;
+    }
+    const double nblk = static_cast<double>(confirm_env_.size());
+    const double mean = nblk > 0 ? sum / nblk : 0.0;
+    const double spread = mean > 0 ? std::sqrt(std::max(0.0, sum2 / nblk - mean * mean)) / mean : 1e9;
+    confirm_env_.clear();
+    if (snr_db < kConfirmDb || spread > kMaxEnvelopeSpread) {
+        lock_best();  // not the beacon: next candidate, or a new sweep
+        return;
+    }
+    double delta = 0.0;
+    const double a = std::log(pw(best - 1) + 1e-30), b = std::log(pw(best) + 1e-30), c = std::log(pw(best + 1) + 1e-30);
+    if (a - 2.0 * b + c != 0.0) delta = std::clamp(0.5 * (a - c) / (a - 2.0 * b + c), -0.5, 0.5);
+    freq_ += (best + delta) * bin_hz / 2.0;
+    trk_nco_.set_frequency(freq_);
+    trk_fir1_.reset();
+    trk_fir2_.reset();
+    prev_ = cf(0.0f, 0.0f);
+    verifying_ = false;
+    good_freq_ = freq_;
+    last_carrier_sample_ = samples_;
 }
 
 void BeaconLock::track_block(const cf* iq, size_t n) {
@@ -332,11 +397,25 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
     trk_nco_.mix_down(iq, scratch_.data(), n);
     stage1_.clear();
     trk_fir1_.process(scratch_.data(), n, stage1_);
+    if (verifying_) {
+        for (const cf& z : stage1_) {
+            env_acc_ += std::norm(z);
+            if (++env_count_ == env_block_) {
+                confirm_env_.push_back(env_acc_ / env_count_);
+                env_acc_ = 0.0;
+                env_count_ = 0;
+            }
+            confirm_buf_.push_back(z * z);
+        }
+        if (confirm_buf_.size() >= confirm_len_) confirm();
+        return;
+    }
     if (cfg_.bpsk) {
         for (cf& z : stage1_) z *= z;
     }
     stage2_.clear();
     trk_fir2_.process(stage1_.data(), stage1_.size(), stage2_);
+
 
     for (const cf& z : stage2_) {
         const std::complex<double> zd(z.real(), z.imag());
@@ -355,7 +434,6 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
             if (std::abs(err) <= limit) {
                 loop_update(err);
                 last_carrier_sample_ = samples_;
-                if (verifying_) ++verify_coherent_;
             }
         }
         coast(dt);
@@ -363,17 +441,7 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
         prod_mag_ = 0.0;
         block_count_ = 0;
 
-        if (verifying_) {
-            ++verify_blocks_;
-            // Not a steady line (too many blocks missed already, or a loop
-            // racing after it): next candidate, or a new sweep.
-            if (verify_blocks_ - verify_coherent_ > kVerifyBlocks - kVerifyCoherent ||
-                std::abs(rate_) > kMaxDriftHzPerS) {
-                lock_best();
-                return;
-            }
-            if (verify_blocks_ >= kVerifyBlocks) verifying_ = false;
-        } else if (std::abs(rate_) > kMaxDriftHzPerS) {
+        if (std::abs(rate_) > kMaxDriftHzPerS) {
             pending_.clear();
             verifying_ = true;  // what it followed was not the beacon: do not report it
             back_to_search();
