@@ -2,6 +2,10 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.26
+
+- **Le filtre de réception agit enfin sans réducteur de bruit** : jusqu'ici, le son passait toujours dans une bande fixe de 150 à 4150 Hz, quel que soit le filtre choisi (1,8 k, 2,4 k, 2,7 k ou 3,2 k). Le filtre choisi ne s'appliquait qu'avec NR1 ou NR2. Il agit maintenant dans tous les cas : en 2,4 k ou 1,8 k, le souffle aigu au-dessus de la voix disparaît. Aucune mise à jour des applis n'est nécessaire : elles installent la nouvelle version sur la carte au START suivant.
+
 ## Nouveautés de la v1.25
 
 - **Synchro de la balise en 1 à 2 secondes au START** : la carte retient la dernière correction du LNB (fichier `lnb_correction` sur la carte SD) et cherche d'abord la balise autour d'elle. Avec la balise PSK, le verrouillage prend environ 2 secondes au lieu de 6. Si le LNB a changé ou trop dérivé, la recherche complète habituelle prend le relais : au pire une seconde de plus qu'avant. Un changement de balise repart aussi de la correction déjà trouvée. Aucune mise à jour des applis n'est nécessaire : elles installent la nouvelle version sur la carte au START suivant.
