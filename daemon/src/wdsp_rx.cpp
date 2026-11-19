@@ -13,6 +13,7 @@ void CloseChannel(int channel);
 void fexchange0(int channel, double* in, double* out, int* error);
 void SetRXAMode(int channel, int mode);
 void SetRXABandpassFreqs(int channel, double f_low, double f_high);
+void RXANBPSetFreqs(int channel, double f_low, double f_high);
 void SetRXAAGCMode(int channel, int mode);
 void SetRXAShiftRun(int channel, int run);
 void SetRXAShiftFreq(int channel, double fshift);
@@ -49,8 +50,7 @@ WdspRx::WdspRx(int channel, int in_rate, int in_size, int dsp_size)
     // type 0 = receive, state 1 = running, bfo 1 = fexchange0 waits for
     // output, which keeps the offline tool strictly sequential.
     OpenChannel(channel_, in_size_, dsp_size, in_rate, kAudioRate, kAudioRate, 0, 1, 0.0, 0.010, 0.0, 0.010, 1);
-    SetRXAMode(channel_, kModeUsb);
-    SetRXABandpassFreqs(channel_, 200.0, 2800.0);
+    set_usb(200.0, 2800.0);
     SetRXAAGCMode(channel_, kAgcMedium);
     SetRXAShiftRun(channel_, 1);
     SetRXAShiftFreq(channel_, 0.0);
@@ -82,7 +82,13 @@ void WdspRx::set_nr(int mode) {
 
 void WdspRx::set_usb(double low_hz, double high_hz) {
     SetRXAMode(channel_, kModeUsb);
+    // Two filters: bp1 runs only with NR1/NR2 (or AM), nbp0 always runs and
+    // is the one that sets what is heard. Left at its default, nbp0 passed
+    // 150-4150 Hz whatever the filter chosen: the filter only acted with NR
+    // on. nbp0 takes the passband mirrored (negative frequencies) for the
+    // same USB audio as bp1; checked by tests/test_filter.cpp.
     SetRXABandpassFreqs(channel_, low_hz, high_hz);
+    RXANBPSetFreqs(channel_, -high_hz, -low_hz);
 }
 
 void WdspRx::process(const cf* in, std::vector<float>& audio) {
