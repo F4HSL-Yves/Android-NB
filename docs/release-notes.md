@@ -2,13 +2,19 @@ Récepteur et émetteur BLU QO-100 bande étroite pour carte Tezuka (FishBall 70
 
 Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/mode-emploi.md
 
+## Nouveautés de la v1.29
+
+- **Suivi de la balise PSK plus calme et plus sûr** : depuis la v1.23, la boucle de suivi était trop nerveuse. Un seul instant bruité (balise faible, porteuse qui passe) faisait croire à une forte dérive du LNB. La carte continuait sur cette fausse dérive, perdait la balise, puis se recalait parfois ailleurs (vu sur une FishBall : jusqu'à 105 kHz de la balise). Maintenant, un à-coup isolé ne compte plus, seule une erreur qui dure est suivie. Quand la balise est perdue de vue, la dérive estimée revient vers sa moyenne au lieu d'être prolongée. Après une perte, la recherche reprend d'abord là où était la balise.
+- **Correction LNB mémorisée seulement après 2 minutes de verrouillage sans coupure**, pour qu'un mauvais verrouillage ne soit plus retenu pour les START suivants. La correction mémorisée par les versions précédentes est oubliée une fois : le premier START prend quelques secondes de plus.
+- Aucune mise à jour des applis n'est nécessaire : elles installent la nouvelle version sur la carte au START suivant.
+
 ## Nouveautés de la v1.26
 
 - **Le filtre de réception agit enfin sans réducteur de bruit** : jusqu'ici, le son passait toujours dans une bande fixe de 150 à 4150 Hz, quel que soit le filtre choisi (1,8 k, 2,4 k, 2,7 k ou 3,2 k). Le filtre choisi ne s'appliquait qu'avec NR1 ou NR2. Il agit maintenant dans tous les cas : en 2,4 k ou 1,8 k, le souffle aigu au-dessus de la voix disparaît. Aucune mise à jour des applis n'est nécessaire : elles installent la nouvelle version sur la carte au START suivant.
 
 ## Nouveautés de la v1.25
 
-- **Synchro de la balise en 1 à 2 secondes au START** : la carte retient la dernière correction du LNB (fichier `lnb_correction` sur la carte SD) et cherche d'abord la balise autour d'elle. Avec la balise PSK, le verrouillage prend environ 2 secondes au lieu de 6. Si le LNB a changé ou trop dérivé, la recherche complète habituelle prend le relais : au pire une seconde de plus qu'avant. Un changement de balise repart aussi de la correction déjà trouvée. Aucune mise à jour des applis n'est nécessaire : elles installent la nouvelle version sur la carte au START suivant.
+- **Synchro de la balise en 1 à 2 secondes au START** : la carte retient la dernière correction du LNB (fichier `lnb_correction`, `lnb_offset` depuis la v1.29, sur la carte SD) et cherche d'abord la balise autour d'elle. Avec la balise PSK, le verrouillage prend environ 2 secondes au lieu de 6. Si le LNB a changé ou trop dérivé, la recherche complète habituelle prend le relais : au pire une seconde de plus qu'avant. Un changement de balise repart aussi de la correction déjà trouvée. Aucune mise à jour des applis n'est nécessaire : elles installent la nouvelle version sur la carte au START suivant.
 
 ## Nouveautés de la v1.24
 

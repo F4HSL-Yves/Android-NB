@@ -615,13 +615,20 @@ int main(int argc, char** argv) {
     double next_report = 1.0;
     const uint64_t max_samples = o.duration_s > 0 ? static_cast<uint64_t>(o.duration_s * o.rate) : UINT64_MAX;
     int exit_code = 0;
-    // --lnb-file: written once locked, then at most once a minute and only
-    // when it moved by kSaveStepHz (the file is on the SD card), and at exit.
+    // --lnb-file: written once locked without a break for kSaveAfterLockS
+    // (a lock that is lost again soon may not be the beacon: seen on a
+    // FishBall, a wrong lock 105 kHz off saved, and every START searching
+    // there first), then at most once a minute and only when it moved by
+    // kSaveStepHz (the file is on the SD card), and at exit.
     constexpr double kSaveStepHz = 300.0;
+    constexpr double kSaveAfterLockS = 120.0;
     double next_save_t = 10.0;
+    double locked_since_t = 0.0;  // start of the current unbroken lock
+    double t_now = 0.0;
     bool have_saved = cfg.has_hint;
     auto save_correction = [&]() {
         if (o.lnb_file.empty() || lock->state() != nb::LockState::Locked) return;
+        if (t_now - locked_since_t < kSaveAfterLockS) return;
         const double c = lock->correction_hz();
         if (have_saved && std::abs(c - saved_correction) < kSaveStepHz) return;
         write_correction(o.lnb_file, c);
@@ -729,6 +736,8 @@ int main(int argc, char** argv) {
             exit_code = 3;
             break;
         }
+        t_now = t;
+        if (lock->state() != nb::LockState::Locked) locked_since_t = t;
         if (t >= next_save_t) {
             // Every 5 s until it is locked, then once a minute.
             next_save_t = t + (lock->state() == nb::LockState::Locked ? 60.0 : 5.0);

@@ -48,6 +48,10 @@ struct Scenario {
     double wobble_hz = 0.0;            // LNB error swinging by +/- this (thermostat, sun)...
     double wobble_period = 60.0;       // ...over this many seconds
     double fm_walk = 0.0;              // LNB frequency random walk, Hz per sqrt(s)
+    double rate_walk = 0.0;            // LNB drift rate random walk, Hz/s per sqrt(s)
+    double loop_hz = 0.0;              // BeaconLockConfig::loop_natural_hz (0: default)
+    double burst_every = 0.0;          // a passing carrier near the beacon every this many s (0: none)...
+    double burst_len = 0.12, burst_amp = 3.0;  // ...lasting this long, this strong (beacon = 1)
     bool has_hint = false;             // BeaconLockConfig::has_hint / hint_hz
     double hint = 0.0;
 };
@@ -110,6 +114,7 @@ struct Result {
     bool locked_in_outage = false;
     bool holdover_seen = false;
     bool wrong_lock = false;           // ever locked more than 1 kHz off
+    double rate_rms = 0.0, rate_max = 0.0;  // drift estimate error, Hz/s (after 15 s, locked)
 };
 
 // Keying pattern: dots, dashes and gaps with roughly 60 % duty cycle.
@@ -135,6 +140,7 @@ Result run(const Scenario& sc) {
     if (sc.search > 0) cfg.search_half_width_hz = sc.search;
     cfg.has_hint = sc.has_hint;
     cfg.hint_hz = sc.hint;
+    cfg.loop_natural_hz = sc.loop_hz;
     nb::BeaconLock lock(cfg);
     std::uniform_int_distribution<int> bit(0, 1);
     double symbol = 1.0;
@@ -150,9 +156,15 @@ Result run(const Scenario& sc) {
     double ph_b = 0.0, ph_i = 0.0, ph_s = 0.0, ph_v = 0.0;
     SsbVoice voice(sc.fs);
     std::mt19937 walk_rng(777);
+    std::mt19937 burst_rng(4242);
+    std::uniform_real_distribution<double> burst_off(-45.0, 45.0);
+    double ph_x = 0.0, burst_hz = 0.0;
+    long burst_k = -1;
     std::normal_distribution<double> walk_gauss(0.0, 1.0);
     const double walk_step = sc.fm_walk / std::sqrt(sc.fs);
-    double walk = 0.0, truth = sc.lnb_error0;
+    double walk = 0.0, truth = sc.lnb_error0, rwalk = 0.0, rint = 0.0, prev_truth = sc.lnb_error0, rate_sq = 0.0;
+    size_t n_rate = 0;
+    const double rwalk_step = sc.rate_walk / std::sqrt(sc.fs);
     nb::LockState prev_state = nb::LockState::Searching;
     double sum_sq = 0.0, max_err = 0.0;
     size_t n_err = 0;
@@ -162,7 +174,11 @@ Result run(const Scenario& sc) {
         for (size_t i = 0; i < block; ++i) {
             const double t = (pos + i) / sc.fs;
             walk += walk_step * walk_gauss(walk_rng);
-            const double err = sc.lnb_error0 + sc.drift * t + walk +
+            if (sc.rate_walk > 0.0) {
+                rwalk += rwalk_step * walk_gauss(walk_rng);
+                rint += rwalk / sc.fs;
+            }
+            const double err = sc.lnb_error0 + sc.drift * t + walk + rint +
                                sc.wobble_hz * std::sin(2.0 * kPi * t / sc.wobble_period);
             truth = err;
             const double fb = sc.beacon_offset + err;
@@ -200,6 +216,21 @@ Result run(const Scenario& sc) {
                 re += sc.ssb_amp * (vr * c - vi * sn);
                 im += sc.ssb_amp * (vr * sn + vi * c);
             }
+            if (sc.burst_every > 0.0) {
+                const long k = static_cast<long>(t / sc.burst_every);
+                if (k != burst_k) {
+                    burst_k = k;
+                    burst_hz = burst_off(burst_rng);
+                }
+                if (k > 0 && t - k * sc.burst_every < sc.burst_len) {
+                    // Squared (BPSK), a carrier at f shows at 2 f: put it half
+                    // way so the tracking sees burst_hz off the beacon.
+                    ph_x += 2.0 * kPi * (fb + (sc.bpsk ? 0.5 : 1.0) * burst_hz) / sc.fs;
+                    if (ph_x > kPi) ph_x -= 2.0 * kPi;
+                    re += sc.burst_amp * std::cos(ph_x);
+                    im += sc.burst_amp * std::sin(ph_x);
+                }
+            }
             if (sc.interferer_offset != 0.0) {
                 re += sc.interferer_amp * std::cos(ph_i);
                 im += sc.interferer_amp * std::sin(ph_i);
@@ -220,6 +251,14 @@ Result run(const Scenario& sc) {
             r.wrong_lock = true;
         const bool outage = t >= sc.outage_from && t < sc.outage_to;
         if (outage && t > sc.outage_from + 6.0 && st.state == nb::LockState::Locked) r.locked_in_outage = true;
+        const double true_rate = (truth - prev_truth) / (block / sc.fs);
+        prev_truth = truth;
+        if (t > 15.0 && st.state == nb::LockState::Locked) {
+            const double re = st.drift_hz_per_s - true_rate;
+            rate_sq += re * re;
+            r.rate_max = std::max(r.rate_max, std::abs(re));
+            ++n_rate;
+        }
         if (t > 15.0 && st.state != nb::LockState::Searching) {
             const double e = st.correction_hz - truth;
             sum_sq += e * e;
@@ -228,6 +267,7 @@ Result run(const Scenario& sc) {
         }
     }
     r.rms_error = n_err ? std::sqrt(sum_sq / n_err) : 1e9;
+    r.rate_rms = n_rate ? std::sqrt(rate_sq / n_rate) : 1e9;
     r.max_error = n_err ? max_err : 1e9;
     r.final_state = lock.state();
     return r;
@@ -545,7 +585,45 @@ int main() {
             CHECK(!r.wrong_lock, "wrong lock");
             CHECK(r.lock_time > 0 && r.lock_time < 25.0, "lock time %.2f", r.lock_time);
             CHECK(r.losses == 0, "%d losses, %.0f s unlocked", r.losses, r.unlocked_s);
-            CHECK(r.rms_error < 10.0, "rms %.3f", r.rms_error);
+            // v1.29: a calmer loop (0.3 Hz) follows a wandering LNB a little less
+            // closely, in exchange for not running away on a bad block.
+            CHECK(r.rms_error < 12.0, "rms %.3f", r.rms_error);
+        }
+    }
+    {
+        // Seen on a FishBall (v1.28, beacon at SNR 12 dB, LNB nearly still):
+        // the drift estimate shook between -19 and +16 Hz/s, then one bad
+        // block threw it to +28 Hz/s; extrapolated, it lost the beacon, and
+        // the next search locked 105 kHz off. Weak beacon, LNB still, with
+        // or without a passing carrier every 5 s: no loss, a calm estimate.
+        const struct { double cn0, burst; const char* name; } cases[] = {
+            {38.0, 0.0, "weak BPSK, LNB still"},
+            {38.0, 5.0, "weak BPSK, passing carriers"},
+            {45.0, 5.0, "BPSK, passing carriers"},
+        };
+        for (const auto& c : cases) {
+            Scenario sc;
+            sc.bpsk = true;
+            sc.keyed = false;
+            sc.beacon_offset = 0.0;
+            sc.lnb_error0 = 21000.0;
+            sc.drift = 0.0;
+            sc.interferer_offset = 0.0;
+            sc.dc_guard = 0.0;
+            sc.search = 100000.0;
+            sc.has_hint = true;
+            sc.hint = 21000.0;
+            sc.cn0_dbhz = c.cn0;
+            sc.burst_every = c.burst;
+            sc.seconds = 200.0;
+            const Result r = run(sc);
+            report(c.name, r);
+            std::printf("%-32s drift estimate rms %.2f Hz/s, max %.2f Hz/s\n", "", r.rate_rms, r.rate_max);
+            CHECK(!r.wrong_lock, "wrong lock");
+            CHECK(r.losses == 0, "%d losses", r.losses);
+            CHECK(r.rate_rms < 3.0, "drift rms %.2f", r.rate_rms);
+            CHECK(r.rate_max < 12.0, "drift max %.2f", r.rate_max);
+            CHECK(r.max_error < 12.0, "max %.3f", r.max_error);
         }
     }
     {

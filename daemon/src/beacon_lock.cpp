@@ -16,6 +16,21 @@ constexpr double kCoherenceGate = 0.7;
 // bigger is a passing signal, not the beacon moving.
 constexpr double kMaxLockedErrorHz = 60.0;
 constexpr double kMaxReacquireErrorHz = 100.0;
+// ...but one block moves the loop by at most this much error: a passing
+// carrier or a noise spike that slips through the coherence gate reads as
+// tens of Hz, and taken whole it threw the drift estimate from -4 to
+// +28 Hz/s in one block (seen on a FishBall, then extrapolated until the
+// beacon was lost). A real error this big is followed over a few blocks.
+// A large error that persists, same sign, over kRealErrorBlocks blocks
+// (160 ms, longer than such a spike) is the beacon really moving away (fast
+// drift, pull-in after the lock): it is then taken whole.
+constexpr double kLoopClampHz = 8.0;
+constexpr int kRealErrorBlocks = 4;
+// Clean blocks too far off to be used: the drift estimate relaxes towards
+// its long-term average (time constants in s) instead of being kept and
+// extrapolated as it was in the last block.
+constexpr double kRateRelaxS = 3.0;
+constexpr double kRateAverageS = 30.0;
 // BPSK acquisition: a candidate whose plain (unsquared) spectrum peak
 // stands this far above its 50..300 Hz surroundings is a carrier, not the
 // beacon. Pure BPSK noise-like bins exceed 10 dB with odds ~1e-4.
@@ -104,7 +119,7 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     if (block_len_ < 4) block_len_ = 4;
 
     const double loop_hz = cfg_.loop_natural_hz > 0.0 ? cfg_.loop_natural_hz
-                                                     : (cfg_.bpsk ? 0.5 : 0.2);
+                                                     : (cfg_.bpsk ? 0.3 : 0.2);
     const double wn = 2.0 * kPi * loop_hz;
     const double dt = block_len_ / trk_rate_;
     k1_ = 2.0 * kZeta * wn * dt;
@@ -114,7 +129,8 @@ BeaconLock::BeaconLock(const BeaconLockConfig& cfg)
     if (cfg_.has_hint && std::abs(cfg_.hint_hz) <= cfg_.search_half_width_hz) {
         freq_ += cfg_.hint_hz;
         hint_window_ = true;
-        acq_nco_.set_frequency(cfg_.beacon_offset_hz + cfg_.hint_hz);
+        hint_hz_ = cfg_.hint_hz;
+        acq_nco_.set_frequency(cfg_.beacon_offset_hz + hint_hz_);
     }
     good_freq_ = freq_;
 }
@@ -175,14 +191,14 @@ void BeaconLock::run_acquisition() {
 bool BeaconLock::hint_acquisition() {
     hint_window_ = false;  // one try: afterwards, the usual sweeps
     std::vector<Candidate> found;
-    acquire_at(cfg_.beacon_offset_hz + cfg_.hint_hz, found);
+    acquire_at(cfg_.beacon_offset_hz + hint_hz_, found);
     // The next acquisition starts the normal sweep, from its first window.
     set_acq_window(0);
     acq_buf_.clear();
     acq_fir_.reset();
     pending_.clear();
     for (const Candidate& c : found) {
-        if (std::abs(c.freq_hz - (cfg_.beacon_offset_hz + cfg_.hint_hz)) > kHintRadiusHz) continue;
+        if (std::abs(c.freq_hz - (cfg_.beacon_offset_hz + hint_hz_)) > kHintRadiusHz) continue;
         bool seen = false;
         for (const Candidate& p : pending_) seen = seen || std::abs(p.freq_hz - c.freq_hz) < kSameSignalHz;
         if (!seen) pending_.push_back(c);
@@ -217,6 +233,16 @@ void BeaconLock::back_to_search() {
     acq_buf_.clear();
     acq_fir_.reset();
     set_acq_window(0);
+}
+
+// The beacon was lost: it has not gone far. Look around the last good
+// frequency first (one window, about a second), then sweep as usual.
+void BeaconLock::search_near_last_lock() {
+    const double rel = good_freq_ - cfg_.beacon_offset_hz;
+    if (std::abs(rel) > cfg_.search_half_width_hz) return;
+    hint_hz_ = rel;
+    hint_window_ = true;
+    acq_nco_.set_frequency(cfg_.beacon_offset_hz + hint_hz_);
 }
 
 void BeaconLock::acquire_at(double centre_hz, std::vector<Candidate>& out) {
@@ -354,6 +380,8 @@ bool BeaconLock::looks_like_bpsk(const std::vector<std::complex<double>>& plain,
 void BeaconLock::enter_tracking(double beacon_freq_hz) {
     freq_ = beacon_freq_hz;
     rate_ = 0.0;
+    rate_avg_ = 0.0;
+    big_err_blocks_ = 0;
     trk_nco_.reset();
     trk_nco_.set_frequency(freq_);
     trk_fir1_.reset();
@@ -461,15 +489,30 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
 
         const double dt = block_len_ / trk_rate_;
         const bool coherent = prod_mag_ > 0.0 && std::abs(prod_) / prod_mag_ > kCoherenceGate;
+        bool used = false;
         if (coherent) {
             double err = std::arg(prod_) * trk_rate_ / (2.0 * kPi);
             if (cfg_.bpsk) err *= 0.5;
             const double limit = (state_ == LockState::Locked) ? kMaxLockedErrorHz : kMaxReacquireErrorHz;
             if (std::abs(err) <= limit) {
-                loop_update(err);
+                if (std::abs(err) <= kLoopClampHz) {
+                    big_err_blocks_ = 0;
+                } else {
+                    const int sign = err > 0 ? 1 : -1;
+                    big_err_blocks_ = (sign == big_err_sign_) ? big_err_blocks_ + 1 : 1;
+                    big_err_sign_ = sign;
+                }
+                loop_update(big_err_blocks_ >= kRealErrorBlocks ? err
+                                                                 : std::clamp(err, -kLoopClampHz, kLoopClampHz));
+                rate_avg_ += (rate_ - rate_avg_) * dt / kRateAverageS;
                 last_carrier_sample_ = samples_;
+                used = true;
             }
         }
+        // A clean carrier too far from the prediction: either the estimate
+        // went wrong or something else passes. Do not keep extrapolating.
+        // (A plain gap, beacon faded, keeps the drift: it was right.)
+        if (coherent && !used) rate_ += (rate_avg_ - rate_) * dt / kRateRelaxS;
         coast(dt);
         prod_ = {0.0, 0.0};
         prod_mag_ = 0.0;
@@ -479,6 +522,7 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
             pending_.clear();
             verifying_ = true;  // what it followed was not the beacon: do not report it
             back_to_search();
+            search_near_last_lock();
             return;
         }
         if (!verifying_) good_freq_ = freq_;
@@ -487,6 +531,7 @@ void BeaconLock::track_block(const cf* iq, size_t n) {
         if (quiet > cfg_.reacquire_after_s) {
             pending_.clear();
             back_to_search();  // freq_ keeps the last estimate for reporting
+            search_near_last_lock();
             return;
         }
         state_ = quiet > cfg_.holdover_after_s ? LockState::Holdover : LockState::Locked;
