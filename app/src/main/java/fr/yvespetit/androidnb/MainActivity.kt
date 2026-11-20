@@ -14,6 +14,16 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.heightIn
@@ -103,19 +113,24 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Listening session: keep the screen on (background playback comes with a service later).
+        // Listening session: keep the screen on. In the background or screen
+        // off, reception goes on through ListenService (started at START).
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     override fun onStop() {
-        // Like Android-DATV: no transmission from an app in the background
-        // (Android also cuts the microphone there).
+        // Reception goes on in the background (ListenService); only the
+        // transmission is cut, as it can no longer be released from the
+        // screen (Android also cuts the microphone there).
         connection.pttOff()
         super.onStop()
     }
 
     override fun onDestroy() {
-        if (isFinishing) connection.disconnect(releaseBoard = true)
+        if (isFinishing) {
+            connection.disconnect(releaseBoard = true)
+            ListenService.set(this, false)
+        }
         super.onDestroy()
     }
 }
@@ -157,6 +172,11 @@ private fun MainScreen(c: NbConnection) {
     var viewCenter by rememberSaveable { mutableLongStateOf(0L) }  // 0: band centre
     var bandWidthPx by remember { mutableIntStateOf(0) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // Screen lock: on the home screen only the PTT (and the lock) answer
+    // touches. Not kept across launches.
+    var locked by rememberSaveable { mutableStateOf(false) }
+    // Level shown as S9 by the S-meter (nbd's level is relative).
+    var smeterS9 by remember { mutableStateOf(prefs.getFloat("smeter_s9_db", SMeterScale.DEFAULT_S9_DB.toFloat()).toDouble()) }
 
     // Android 17 blocks sockets to the local network (the board) until the
     // user grants "Local network".
@@ -175,6 +195,15 @@ private fun MainScreen(c: NbConnection) {
     var autoTried by remember { mutableStateOf(false) }
     // Newer APK on GitHub (seen at the last START): offered in a banner.
     var newerApp by remember { mutableStateOf(installer.newerApp()) }
+    // Android 13+: the "Réception en cours" notification of ListenService
+    // needs this; asked once, at the first START (reception works without).
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    fun askNotificationsOnce() {
+        if (Build.VERSION.SDK_INT < 33 || prefs.getBoolean("notif_asked", false)) return
+        if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        prefs.edit().putBoolean("notif_asked", true).apply()
+        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
     fun connectNow() {
         prefs.edit().putString("host", host).putString("port", port).apply()
         c.connect(host, port.toIntOrNull() ?: 8073)
@@ -195,6 +224,7 @@ private fun MainScreen(c: NbConnection) {
         }
     }
     fun start() {
+        askNotificationsOnce()
         permissionError = null
         setupMessage = null
         val target = host
@@ -236,6 +266,9 @@ private fun MainScreen(c: NbConnection) {
     val status = c.status
     val hello = c.hello
     val connected = c.link == NbConnection.Link.CONNECTED
+    // Background reception: the service runs from START to STOP.
+    val listening = c.link != NbConnection.Link.DISCONNECTED
+    LaunchedEffect(listening) { ListenService.set(context, listening) }
     val minHz = hello?.minFreqHz ?: Qo100.DOWNLINK_LOW_HZ
     val maxHz = hello?.maxFreqHz ?: Qo100.DOWNLINK_HIGH_HZ
 
@@ -329,7 +362,7 @@ private fun MainScreen(c: NbConnection) {
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.fillMaxWidth()
                     .background(MaterialTheme.colorScheme.primaryContainer)
-                    .clickable {
+                    .clickable(enabled = !locked) {
                         runCatching {
                             context.startActivity(
                                 android.content.Intent(
@@ -353,6 +386,7 @@ private fun MainScreen(c: NbConnection) {
                     },
                     onListen = { listen() }, onTune = { tuneTo(it) }, onStep = { step = it }, onRit = { setRit(it) },
                     onSpan = { span = it }, onBandWidth = { bandWidthPx = it },
+                    locked = locked, onLock = { locked = it }, smeterS9 = smeterS9,
                 )
             } else {
                 SettingsTab(
@@ -376,10 +410,15 @@ private fun MainScreen(c: NbConnection) {
                     calibrating = calibrating, calibMessage = calibMessage,
                     onCalibrate = { calibrating = true },
                     canCalibrate = connected && c.mqttUp && Qo100.isTransmitAllowed(Qo100.uplinkFor(dial)),
+                    smeterS9 = smeterS9, onSmeterS9 = {
+                        smeterS9 = it
+                        prefs.edit().putFloat("smeter_s9_db", it.toFloat()).apply()
+                    },
                 )
             }
         }
-        NavigationBar(windowInsets = WindowInsets(0)) {
+        // Locked: no switching tab either.
+        if (!locked) NavigationBar(windowInsets = WindowInsets(0)) {
             NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("📡") }, label = { Text("Accueil") })
             NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("🎧") }, label = { Text("Réglages\nréception", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, lineHeight = 13.sp) })
             if (hello?.tx == true || tab == 2) {
@@ -395,6 +434,7 @@ private fun HomeTab(
     filterLow: Int, filterHigh: Int, permissionError: String?, installing: Boolean, muteTx: Boolean, onMuteTx: (Boolean) -> Unit,
     onListen: () -> Unit, onTune: (Long) -> Unit, onStep: (Long) -> Unit, onRit: (Int) -> Unit,
     onSpan: (Int) -> Unit, onBandWidth: (Int) -> Unit,
+    locked: Boolean, onLock: (Boolean) -> Unit, smeterS9: Double,
 ) {
     val status = c.status
     val hello = c.hello
@@ -415,13 +455,16 @@ private fun HomeTab(
             appVersion?.let {
                 Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            HelpButton()
+            LockGuard(locked) { HelpButton() }
             Spacer(modifier = Modifier.weight(1f))
-            BeaconBadge(status) { hz ->
-                prefs.edit().putLong("beacon_hz", hz).apply()
-                c.setBeacon(hz)
+            LockGuard(locked) {
+                BeaconBadge(status) { hz ->
+                    prefs.edit().putLong("beacon_hz", hz).apply()
+                    c.setBeacon(hz)
+                }
             }
             LinkBadge(c.link)
+            LockButton(locked, onLock)
         }
         val problem = when {
             permissionError != null -> permissionError
@@ -436,66 +479,78 @@ private fun HomeTab(
 
         // Band: spectrum and waterfall; tap or drag to tune, pinch to zoom.
         if (hello != null && hello.spectrumSource != "off" && waterfallRate > 0) {
-            BandView(
-                waterfall = c.waterfall, version = c.waterfallVersion, dialHz = dial,
-                filterLowHz = filterLow, filterHighHz = filterHigh, ritHz = rit, onTune = onTune,
-                onZoom = { f -> onSpan(kotlin.math.round(span / f).toInt().coerceIn(MIN_SPAN_HZ, spans[0].first)) },
-                viewLeftHz = (if (viewCenter != 0L) viewCenter else hello.centerHz) - span / 2,
-                viewSpanHz = span,
-                modifier = Modifier.weight(1f).heightIn(min = 120.dp).onSizeChanged { onBandWidth(it.width) },
-            )
-            ChipRow(if (spans.any { it.first == span }) "Vue" else "Vue ${formatSpan(span)}", spans, spans.firstOrNull { it.first == span }, { it.second }) { onSpan(it.first) }
+            LockGuard(locked, Modifier.weight(1f).fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    BandView(
+                        waterfall = c.waterfall, version = c.waterfallVersion, dialHz = dial,
+                        filterLowHz = filterLow, filterHighHz = filterHigh, ritHz = rit, onTune = onTune,
+                        onZoom = { f -> onSpan(kotlin.math.round(span / f).toInt().coerceIn(MIN_SPAN_HZ, spans[0].first)) },
+                        viewLeftHz = (if (viewCenter != 0L) viewCenter else hello.centerHz) - span / 2,
+                        viewSpanHz = span,
+                        modifier = Modifier.weight(1f).heightIn(min = 120.dp).onSizeChanged { onBandWidth(it.width) },
+                    )
+                    ChipRow(if (spans.any { it.first == span }) "Vue" else "Vue ${formatSpan(span)}", spans, spans.firstOrNull { it.first == span }, { it.second }) { onSpan(it.first) }
+                }
+            }
         } else {
             Spacer(modifier = Modifier.weight(1f))
         }
 
         // Frequency: − / + by the step, tap the figure to type one.
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            OutlinedButton(onClick = { onTune(dial - step) }) { Text("−") }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.weight(1f).clickable { goTo = true },
-            ) {
-                Text(Qo100.formatMHz(dial), fontFamily = FontFamily.Monospace, fontSize = 28.sp, maxLines = 1)
-                val up = Qo100.uplinkFor(dial)
-                Text(
-                    "TX " + Qo100.formatMHz(up) + if (Qo100.isTransmitAllowed(up)) "" else " (hors zone)",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            OutlinedButton(onClick = { onTune(dial + step) }) { Text("+") }
-        }
-        ChipRow("Pas", steps, step, { if (it >= 1000) "${it / 1000} kHz" else "$it Hz" }, onStep)
+        LockGuard(locked, Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedButton(onClick = { onTune(dial - step) }) { Text("−") }
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.weight(1f).clickable { goTo = true },
+                    ) {
+                        Text(Qo100.formatMHz(dial), fontFamily = FontFamily.Monospace, fontSize = 28.sp, maxLines = 1)
+                        val up = Qo100.uplinkFor(dial)
+                        Text(
+                            "TX " + Qo100.formatMHz(up) + if (Qo100.isTransmitAllowed(up)) "" else " (hors zone)",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    OutlinedButton(onClick = { onTune(dial + step) }) { Text("+") }
+                }
+                ChipRow("Pas", steps, step, { if (it >= 1000) "${it / 1000} kHz" else "$it Hz" }, onStep)
 
-        // RIT: listen beside the dial, the uplink stays put.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                String.format(Locale.FRANCE, "RIT %+d", rit), modifier = Modifier.width(72.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (rit != 0) Color(0xFFFFD54F) else MaterialTheme.colorScheme.onSurface,
-            )
-            Slider(
-                value = rit.toFloat(), valueRange = ritRange,
-                onValueChange = { onRit((Math.round(it / 10f) * 10)) },
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = { onRit(0) }, enabled = rit != 0) { Text("0") }
+                // RIT: listen beside the dial, the uplink stays put.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        String.format(Locale.FRANCE, "RIT %+d", rit), modifier = Modifier.width(72.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (rit != 0) Color(0xFFFFD54F) else MaterialTheme.colorScheme.onSurface,
+                    )
+                    Slider(
+                        value = rit.toFloat(), valueRange = ritRange,
+                        onValueChange = { onRit((Math.round(it / 10f) * 10)) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onRit(0) }, enabled = rit != 0) { Text("0") }
+                }
+            }
         }
-        SMeter(status?.signalDb)
+        SMeter(status?.signalDb, smeterS9)
 
         // Mute in TX and three memories: tap recalls, long press stores the dial.
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (hello?.tx == true) {
-                FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet TX") })
+        LockGuard(locked, Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (hello?.tx == true) {
+                    FilterChip(selected = muteTx, onClick = { onMuteTx(!muteTx) }, label = { Text("Muet TX") })
+                }
+                for (slot in 1..3) MemoryChip(slot, dial, onTune, modifier = Modifier.weight(1f))
             }
-            for (slot in 1..3) MemoryChip(slot, dial, onTune, modifier = Modifier.weight(1f))
         }
         // Bottom row, under the thumb: START / STOP beside the PTT.
         val startStop: @Composable RowScope.() -> Unit = {
-            StartStopButton(c, installing, onListen, Modifier.weight(1f))
+            LockGuard(locked, Modifier.weight(1f)) {
+                StartStopButton(c, installing, onListen, Modifier.fillMaxWidth())
+            }
         }
         if (hello?.tx == true) {
-            TxControls(c, dial, connected, startStop)
+            TxControls(c, dial, connected, locked, startStop)
         } else {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { startStop() }
         }
@@ -525,6 +580,55 @@ private fun HelpButton() {
             },
     ) {
         Text("?", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+    }
+}
+
+/**
+ * While [locked], [content] ignores every touch: a transparent layer above
+ * it takes them all (only the PTT and the lock button stay outside).
+ */
+@Composable
+private fun LockGuard(locked: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Box(modifier) {
+        content()
+        if (locked) {
+            Box(
+                Modifier.matchParentSize().pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Screen lock. Unlocked, a tap locks; locked, only a long press unlocks (a
+ * tap just says so), so a stray touch does not undo it.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LockButton(locked: Boolean, onLock: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    fun toast(text: String) = android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
+    fun change(lock: Boolean) {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        onLock(lock)
+        toast(if (lock) "Écran verrouillé : seul le PTT répond. Appui long sur le cadenas pour déverrouiller." else "Écran déverrouillé")
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(width = 34.dp, height = 28.dp).clip(RoundedCornerShape(8.dp))
+            .background(if (locked) Color(0xFFFFB300) else Color(0xFF404040))
+            .combinedClickable(
+                onClickLabel = if (locked) "Déverrouiller l'écran (appui long)" else "Verrouiller l'écran",
+                onClick = { if (locked) toast("Appui long sur le cadenas pour déverrouiller") else change(true) },
+                onLongClick = { if (locked) change(false) },
+            ),
+    ) {
+        Text(if (locked) "🔒" else "🔓", fontSize = 14.sp)
     }
 }
 
@@ -581,7 +685,7 @@ private fun GoToDialog(dial: Long, onDismiss: () -> Unit, onGo: (Long) -> Unit) 
 
 /** PTT and RF gain: the transmit controls used during a QSO. */
 @Composable
-private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startStop: @Composable RowScope.() -> Unit) {
+private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, locked: Boolean, startStop: @Composable RowScope.() -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("nb", android.content.Context.MODE_PRIVATE) }
     // The gain chosen here is saved and enforced on the board (at START and
@@ -612,21 +716,23 @@ private fun TxControls(c: NbConnection, dial: Long, connected: Boolean, startSto
         Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2,
             color = if (c.ptt == NbConnection.Ptt.OFF) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(String.format(Locale.FRANCE, "Gain TX %.0f dB", gain), modifier = Modifier.width(104.dp),
-            style = MaterialTheme.typography.bodySmall)
-        Slider(
-            value = gain, valueRange = -50f..0f, steps = 49,
-            onValueChange = {
-                gain = Math.round(it).toFloat()
-                gainTouched = true
-            },
-            onValueChangeFinished = {
-                prefs.edit().putInt("tx_gain_db", gain.toInt()).apply()
-                c.setTxGain(gain.toInt())
-            },
-            enabled = c.mqttUp && c.callsign != null,
-        )
+    LockGuard(locked, Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(String.format(Locale.FRANCE, "Gain TX %.0f dB", gain), modifier = Modifier.width(104.dp),
+                style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = gain, valueRange = -50f..0f, steps = 49,
+                onValueChange = {
+                    gain = Math.round(it).toFloat()
+                    gainTouched = true
+                },
+                onValueChangeFinished = {
+                    prefs.edit().putInt("tx_gain_db", gain.toInt()).apply()
+                    c.setTxGain(gain.toInt())
+                },
+                enabled = c.mqttUp && c.callsign != null,
+            )
+        }
     }
     // PTT last: right above the tab bar, under the thumb, beside START / STOP.
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -697,6 +803,7 @@ private fun SettingsTab(
     tune: Boolean, onTune: (Boolean) -> Unit,
     arduino: Boolean, onArduino: (Boolean) -> Unit,
     calibrating: Boolean, calibMessage: String?, onCalibrate: () -> Unit, canCalibrate: Boolean,
+    smeterS9: Double, onSmeterS9: (Double) -> Unit,
 ) {
     val status = c.status
     val hello = c.hello
@@ -860,6 +967,19 @@ private fun SettingsTab(
         ChipRow("Chute", waterfallRates, waterfallRate, { if (it == 0) "Off" else "$it/s" }, onWaterfallRate)
         ChipRow("Débit", bitrates, status?.bitrate, { "${it / 1000}k" }) { c.setBitrate(it) }
         ChipRow("Tampon", buffers, bufferPackets, { "${it * 20} ms" }, onBuffer)
+        Text("S-mètre", style = MaterialTheme.typography.bodyMedium)
+        DbSlider("S9 à", smeterS9.toFloat(), -100f..20f, true) { onSmeterS9(it.toDouble()) }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = false, enabled = status != null,
+                onClick = { status?.let { onSmeterS9(SMeterScale.s9ForNoiseAtS2(it.signalDb)) } },
+                label = { Text("Bruit = S2") },
+            )
+            Text(
+                "Sur une fréquence sans signal : le bruit s'affiche alors S2 (6 dB par point S).",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
+            )
+        }
 
         Section("État")
         BeaconPanel(status)
@@ -1043,14 +1163,46 @@ private fun BeaconPanel(status: NbProtocol.Status?) {
     }
 }
 
+private val meterGreen = Color(0xFF4CAF50)
+private val meterRed = Color(0xFFE53935)
+
+/** S-meter: S1…S9 then +10…+60 dB, green up to S9 and red above (see SMeterScale). */
 @Composable
-private fun SMeter(db: Double?) {
-    // WDSP S-meter in dB: S9 = -73 dBm on HF conventions; here only relative, 60 dB span.
-    val fraction = if (db == null) 0f else ((db + 120.0) / 60.0).toFloat().coerceIn(0f, 1f)
+private fun SMeter(db: Double?, s9: Double) {
+    val target = db?.let { SMeterScale.fraction(it, s9) }?.toFloat() ?: 0f
+    val f by animateFloatAsState(target, tween(120, easing = LinearEasing), label = "smeter")
+    val s9f = SMeterScale.S9_FRACTION.toFloat()
+    val over = db != null && db >= s9
     Column {
-        Text(if (db == null) "Signal —" else String.format(Locale.FRANCE, "Signal %.1f dB", db), style = MaterialTheme.typography.bodySmall)
-        Box(modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF303030))) {
-            Box(modifier = Modifier.fillMaxWidth(fraction).fillMaxHeight().background(Color(0xFF42A5F5)))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                db?.let { SMeterScale.label(it, s9) } ?: "S —",
+                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (over) meterRed else MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                db?.let { String.format(Locale.FRANCE, "%.1f dB", it) } ?: "",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(24.dp)) {
+            val w = maxWidth
+            Box(Modifier.width(w).height(8.dp).background(Color(0xFF303030)))
+            Box(Modifier.offset(x = w * s9f).width(w * (1 - s9f)).height(8.dp).background(meterRed.copy(alpha = 0.18f)))
+            Box(Modifier.width(w * kotlin.math.min(f, s9f)).height(8.dp).background(meterGreen.copy(alpha = 0.95f)))
+            Box(Modifier.offset(x = w * s9f).width(w * kotlin.math.max(f - s9f, 0f)).height(8.dp).background(meterRed))
+            SMeterScale.ticks.forEach { (pos, label) ->
+                val x = pos.toFloat()
+                Box(Modifier.offset(x = w * x - 0.5.dp, y = 8.dp).width(1.dp).height(4.dp).background(Color(0xFF8C8C8C)))
+                Text(
+                    label, fontSize = 9.sp, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false,
+                    textAlign = TextAlign.Center,
+                    color = if (x > s9f + 0.01f) meterRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.offset(x = minOf(w * x - 15.dp, w - 22.dp), y = 11.dp).width(30.dp),
+                )
+            }
         }
     }
 }
