@@ -59,6 +59,8 @@ fun BandView(
     viewSpanHz: Int = 0,
     /** Share of the height for the spectrum trace; the waterfall gets the rest. */
     spectrumShare: Float = 0.3f,
+    /** Height of the spectrum trace in dB, from 5 dB under the noise floor. */
+    spectrumRangeDb: Float = 65f,
     modifier: Modifier = Modifier,
 ) {
     // The requested view (follows the fingers at once); the waterfall rows
@@ -130,7 +132,7 @@ fun BandView(
             drawRect(Color(0xFF0A0F1A), size = Size(size.width, traceH))
             clipRect {
                 drawWaterfall(waterfall, holder, traceH, x0, x1)
-                drawTrace(waterfall, traceH, x0, x1)
+                drawTrace(waterfall, traceH, x0, x1, spectrumRangeDb)
             }
             drawMarkers(view, dialHz, ritHz, filterLowHz, filterHighHz)
         }
@@ -173,11 +175,17 @@ private fun DrawScope.drawWaterfall(w: Waterfall, holder: BitmapHolder, top: Flo
     }
 }
 
-private fun DrawScope.drawTrace(w: Waterfall, h: Float, x0: Float, x1: Float) {
+private fun DrawScope.drawTrace(w: Waterfall, h: Float, x0: Float, x1: Float, range: Float) {
     val n = w.trace.size
     if (n < 2 || w.floorDb.isNaN()) return
     val lo = w.floorDb - 5f
-    val range = w.rangeDb + 15f
+    // Faint line every 10 dB over the noise floor, to read the height of a signal.
+    var g = 10f
+    while (g < range - 5f) {
+        val y = h - (g + 5f) / range * h
+        drawLine(Color(0x30FFFFFF), Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+        g += 10f
+    }
     val path = Path()
     var started = false
     for (k in 0 until n) {

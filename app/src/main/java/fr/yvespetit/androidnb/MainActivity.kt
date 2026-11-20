@@ -156,6 +156,8 @@ private const val MIN_SPAN_HZ = 3_000  // narrowest pinch zoom
 private val waterfallRates = listOf(0, 4, 8, 12)  // lines per second, 0 = off
 /** Share of the band view for the spectrum, in %; the waterfall gets the rest. */
 private val spectrumShares = listOf(30, 40, 50, 60)
+/** Height of the spectrum trace in dB (65: the default, everything fits; 20: weak signals stand out). */
+private val spectrumRanges = listOf(20, 30, 45, 65)
 
 private val ritRange = -3000f..3000f
 
@@ -172,6 +174,7 @@ private fun MainScreen(c: NbConnection) {
     var span by rememberSaveable { mutableIntStateOf(spans[0].first) }
     var waterfallRate by rememberSaveable { mutableIntStateOf(8) }
     var spectrumShare by remember { mutableIntStateOf(prefs.getInt("spectrum_share", 30)) }
+    var spectrumRange by remember { mutableIntStateOf(prefs.getInt("spectrum_range_db", 65)) }
     var viewCenter by rememberSaveable { mutableLongStateOf(0L) }  // 0: band centre
     var bandWidthPx by remember { mutableIntStateOf(0) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -389,7 +392,7 @@ private fun MainScreen(c: NbConnection) {
                     },
                     onListen = { listen() }, onTune = { tuneTo(it) }, onStep = { step = it }, onRit = { setRit(it) },
                     onSpan = { span = it }, onBandWidth = { bandWidthPx = it },
-                    locked = locked, onLock = { locked = it }, smeterS9 = smeterS9, spectrumShare = spectrumShare,
+                    locked = locked, onLock = { locked = it }, smeterS9 = smeterS9, spectrumShare = spectrumShare, spectrumRange = spectrumRange,
                 )
             } else {
                 SettingsTab(
@@ -401,6 +404,10 @@ private fun MainScreen(c: NbConnection) {
                     spectrumShare = spectrumShare, onSpectrumShare = {
                         spectrumShare = it
                         prefs.edit().putInt("spectrum_share", it).apply()
+                    },
+                    spectrumRange = spectrumRange, onSpectrumRange = {
+                        spectrumRange = it
+                        prefs.edit().putInt("spectrum_range_db", it).apply()
                     },
                     bufferPackets = bufferPackets, onBuffer = {
                         bufferPackets = it
@@ -441,7 +448,7 @@ private fun HomeTab(
     filterLow: Int, filterHigh: Int, permissionError: String?, installing: Boolean, muteTx: Boolean, onMuteTx: (Boolean) -> Unit,
     onListen: () -> Unit, onTune: (Long) -> Unit, onStep: (Long) -> Unit, onRit: (Int) -> Unit,
     onSpan: (Int) -> Unit, onBandWidth: (Int) -> Unit,
-    locked: Boolean, onLock: (Boolean) -> Unit, smeterS9: Double, spectrumShare: Int,
+    locked: Boolean, onLock: (Boolean) -> Unit, smeterS9: Double, spectrumShare: Int, spectrumRange: Int,
 ) {
     val status = c.status
     val hello = c.hello
@@ -495,6 +502,7 @@ private fun HomeTab(
                         viewLeftHz = (if (viewCenter != 0L) viewCenter else hello.centerHz) - span / 2,
                         viewSpanHz = span,
                         spectrumShare = spectrumShare / 100f,
+                        spectrumRangeDb = spectrumRange.toFloat(),
                         modifier = Modifier.weight(1f).heightIn(min = 120.dp).onSizeChanged { onBandWidth(it.width) },
                     )
                     ChipRow(if (spans.any { it.first == span }) "Vue" else "Vue ${formatSpan(span)}", spans, spans.firstOrNull { it.first == span }, { it.second }) { onSpan(it.first) }
@@ -808,7 +816,7 @@ private fun SettingsTab(
     host: String, port: String, onHost: (String) -> Unit, onPort: (String) -> Unit, onListen: () -> Unit,
     permissionError: String?,
     waterfallRate: Int, onWaterfallRate: (Int) -> Unit, bufferPackets: Int, onBuffer: (Int) -> Unit,
-    spectrumShare: Int, onSpectrumShare: (Int) -> Unit,
+    spectrumShare: Int, onSpectrumShare: (Int) -> Unit, spectrumRange: Int, onSpectrumRange: (Int) -> Unit,
     tune: Boolean, onTune: (Boolean) -> Unit,
     arduino: Boolean, onArduino: (Boolean) -> Unit,
     calibrating: Boolean, calibMessage: String?, onCalibrate: () -> Unit, canCalibrate: Boolean,
@@ -975,6 +983,7 @@ private fun SettingsTab(
         }
         ChipRow("Chute", waterfallRates, waterfallRate, { if (it == 0) "Off" else "$it/s" }, onWaterfallRate)
         ChipRow("Spectre", spectrumShares, spectrumShare, { "$it %" }, onSpectrumShare)
+        ChipRow("Échelle", spectrumRanges, spectrumRange, { "$it dB" }, onSpectrumRange)
         ChipRow("Débit", bitrates, status?.bitrate, { "${it / 1000}k" }) { c.setBitrate(it) }
         ChipRow("Tampon", buffers, bufferPackets, { "${it * 20} ms" }, onBuffer)
         Text("S-mètre", style = MaterialTheme.typography.bodyMedium)
