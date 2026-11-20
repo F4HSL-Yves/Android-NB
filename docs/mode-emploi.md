@@ -208,6 +208,7 @@ L'émission s'arrête d'elle-même si l'appli passe en arrière-plan (écran
 | **AGC** | Off, Lent, Moyen, Rapide | Moyen ou Lent en phonie. |
 | **Bruit** | Off, NR1, NR2 | Réducteur de bruit. NR2 est plus fort, mais peut colorer la voix. |
 | **Chute** | Off, 4/s, 8/s, 12/s | Vitesse du waterfall. Off coupe le spectre et économise les données. |
+| **Spectre** | 30, 40, 50, 60 % | Part de la hauteur pour la courbe du spectre ; le waterfall prend le reste. |
 | **Débit** | 8k, 12k, 16k, 24k | Débit audio Opus. 16k convient partout, 8k en 4G faible. |
 | **Tampon** | 80, 120, 200, 300 ms | Anti-coupures. Court en Wi-Fi, long en 4G. |
 | **S-mètre S9 à** | -100 à +20 dB (-17 par défaut) | Le niveau de nbd est relatif : ce réglage fixe le niveau affiché S9. **Bruit = S2**, sur une fréquence sans signal, le place pour que le bruit s'affiche S2. |

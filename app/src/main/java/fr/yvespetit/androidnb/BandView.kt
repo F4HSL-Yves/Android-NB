@@ -57,6 +57,8 @@ fun BandView(
     onZoom: (Float) -> Unit,
     viewLeftHz: Long = 0L,
     viewSpanHz: Int = 0,
+    /** Share of the height for the spectrum trace; the waterfall gets the rest. */
+    spectrumShare: Float = 0.3f,
     modifier: Modifier = Modifier,
 ) {
     // The requested view (follows the fingers at once); the waterfall rows
@@ -122,7 +124,7 @@ fun BandView(
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             if (version < 0) return@Canvas  // reading version redraws on each new row
-            val traceH = size.height * 0.3f
+            val traceH = size.height * spectrumShare
             val x0 = view.fractionOf(waterfall.leftHz) * size.width
             val x1 = view.fractionOf(waterfall.leftHz + waterfall.spanHz) * size.width
             drawRect(Color(0xFF0A0F1A), size = Size(size.width, traceH))
