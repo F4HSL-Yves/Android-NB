@@ -23,7 +23,7 @@
 #
 # Files live on the SD card (the root filesystem is in RAM and jffs2 is
 # almost full): /boot/nb/nbd, nb.conf, this script, the FFTW wisdom, the
-# remembered mode and the last LNB correction (lnb_correction: nbd looks for
+# remembered mode and the last LNB correction (lnb_offset: nbd looks for
 # the beacon around it first, so a START locks in a second or two). nbd is copied to /tmp to run, so a vfat mount option
 # cannot stop it from executing.
 
@@ -80,8 +80,10 @@ start_nb() {
         mine() { [ "$(cat "$RUN_FLAG" 2>/dev/null)" = "$token" ]; }
         while mine; do
             echo "--- nbd start $(date)" >>"$LOG"
+            # Up to v1.28 nbd could save a wrong lock there: start afresh.
+            rm -f "$NB_DIR/lnb_correction"
             rc=0
-            /tmp/nbd $NBD_ARGS --idle-exit "$NB_IDLE_EXIT" --wisdom "$NB_DIR/" --lnb-file "$NB_DIR/lnb_correction" \
+            /tmp/nbd $NBD_ARGS --idle-exit "$NB_IDLE_EXIT" --wisdom "$NB_DIR/" --lnb-file "$NB_DIR/lnb_offset" \
                 --quiet >>"$LOG" 2>&1 || rc=$?
             if [ "$rc" = 3 ] && mine; then
                 log "no app connected for ${NB_IDLE_EXIT} s: radio given back"

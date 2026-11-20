@@ -46,9 +46,8 @@ struct BeaconLockConfig {
     // Minimum peak-to-median ratio to accept an acquisition, in dB.
     double acquisition_snr_db = 12.0;
     // Natural frequency of the tracking loop, in Hz. Lower = smoother,
-    // higher = follows faster drift. 0 = default for the mode: 0.5 Hz for
-    // the BPSK beacon (LNBs that drift fast), 0.2 Hz for CW (coasts better
-    // through a beacon outage).
+    // higher = follows faster drift. 0 = default for the mode: 0.3 Hz for
+    // the BPSK beacon, 0.2 Hz for CW (coasts better through a beacon outage).
     double loop_natural_hz = 0.0;
     // Seconds without a coherent block before reporting holdover,
     // and before going back to a full search.
@@ -122,6 +121,7 @@ private:
     void lock_best();     // track the strongest candidate left, or search again
     void back_to_search();
     bool hint_acquisition();  // true when it handled this acquisition
+    void search_near_last_lock();
 
     BeaconLockConfig cfg_;
     LockState state_ = LockState::Searching;
@@ -143,7 +143,8 @@ private:
     size_t acq_fft_size_ = 0;
     std::vector<cf> acq_buf_;
     double acq_snr_db_ = 0.0;
-    bool hint_window_ = false;  // the next acquisition looks around cfg_.hint_hz
+    bool hint_window_ = false;  // the next acquisition looks around hint_hz_
+    double hint_hz_ = 0.0;      // cfg_.hint_hz, then the last lock after a loss
 
     // Tracking chain.
     Nco trk_nco_;
@@ -171,6 +172,8 @@ private:
     // Loop state.
     double freq_ = 0.0;  // current beacon position estimate, Hz from centre
     double rate_ = 0.0;  // Hz per second
+    double rate_avg_ = 0.0;  // its long-term average (kRateAverageS)
+    int big_err_blocks_ = 0, big_err_sign_ = 0;  // run of large same-sign errors
     double k1_ = 0.0, k2_ = 0.0;
     uint64_t last_carrier_sample_ = 0;
 
