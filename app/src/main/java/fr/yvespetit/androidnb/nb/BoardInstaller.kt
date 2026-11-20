@@ -111,7 +111,17 @@ class BoardInstaller(private val context: Context) {
             )
         }
         try {
-            run(session, "test -d /mnt/jffs2 && test -d /boot", "Ce n'est pas une carte Tezuka (pas de /mnt/jffs2 ou /boot)")
+            run(session, "test -d /mnt/jffs2", "Ce n'est pas une carte Tezuka (pas de /mnt/jffs2)")
+            // Some Tezuka builds (v0.3.24 on a FishBall) boot from the SD card
+            // without mounting it: mount it on /boot (install.sh makes the
+            // board do the same at every boot).
+            run(
+                session,
+                "grep -q ' /boot ' /proc/mounts || for p in /dev/mmcblk0p1 /dev/mmcblk1p1; do " +
+                    "[ -b \$p ] && mkdir -p /boot && mount -t vfat \$p /boot && break; done; grep -q ' /boot ' /proc/mounts",
+                "Carte SD introuvable : /boot n'est pas monté et aucune partition /dev/mmcblk0p1 n'a pu l'être. " +
+                    "QO-100 NB s'installe sur la carte SD de la carte radio.",
+            )
             run(session, "mkdir -p /boot/nb", "Impossible de créer /boot/nb sur la carte SD")
             for (name in files) {
                 val target = "/boot/nb/$name"
