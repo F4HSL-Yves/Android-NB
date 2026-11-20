@@ -14,7 +14,7 @@ AUTORUN=/mnt/jffs2/autorun.sh
 LINE="[ -f $NB_DIR/nbctl.sh ] && sh $NB_DIR/nbctl.sh boot"
 # Some Tezuka builds (v0.3.24 on a FishBall, seen) boot from the SD card but
 # do not mount it: mount its first partition on /boot before starting NB.
-MOUNT_LINE='grep -q " /boot " /proc/mounts || for p in /dev/mmcblk0p1 /dev/mmcblk1p1; do [ -b $p ] && mkdir -p /boot && mount -t vfat $p /boot && break; done  # QO-100 NB: SD on /boot'
+MOUNT_LINE='grep -q " /boot " /proc/mounts || for p in /dev/mmcblk0p1 /dev/mmcblk0 /dev/mmcblk1p1; do [ -b $p ] && mkdir -p /boot && mount -t vfat $p /boot && break; done  # QO-100 NB: SD on /boot'
 
 [ -x /usr/bin/mosquitto_sub ] || [ -x /usr/sbin/mosquitto ] || command -v mosquitto_sub >/dev/null ||
     { echo "install.sh: no MQTT broker on this board: a Tezuka firmware is needed"; exit 1; }
