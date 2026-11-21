@@ -40,6 +40,14 @@ Le firmware de la carte n'est pas modifié. L'appli dépose ses fichiers dans
 `/boot/nb` sur la carte SD, et ajoute une ligne à `/mnt/jffs2/autorun.sh` pour
 se lancer au démarrage.
 
+**Pluto d'origine (sans lecteur de carte SD)** : l'appli met ses fichiers en
+mémoire, dans `/tmp/nb`, et seulement `nb.conf` et quelques octets de
+mémorisation dans la flash (`/mnt/jffs2/nb`). La mémoire est vidée à chaque
+redémarrage du Pluto : l'appli s'en aperçoit au START suivant et recopie les
+fichiers toute seule, en quelques secondes. Sur un Pluto d'origine, utilisez
+Tezuka **v0.3.20** (fichier `pluto.frm` seul) : les versions 0.3.22 à 0.3.24
+ne démarrent pas avec le bootloader d'ADI.
+
 ## 2. Installer l'appli
 
 Sur le téléphone, ouvrir ce lien. Il donne toujours la dernière version :
@@ -317,7 +325,8 @@ Les réglages de l'appli et de la carte sont conservés.
 
 ## 12. Réglages de la carte (nb.conf)
 
-Les réglages de la carte sont dans `/boot/nb/nb.conf`, sur la carte SD. Les
+Les réglages de la carte sont dans `/boot/nb/nb.conf`, sur la carte SD
+(`/mnt/jffs2/nb/nb.conf` sur un Pluto sans carte SD). Les
 mises à jour ne remplacent pas ce fichier. Pour le modifier, se connecter en
 ssh (`ssh root@192.168.1.125`) et l'éditer, puis redémarrer la carte.
 

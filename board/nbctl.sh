@@ -22,19 +22,28 @@
 # datv, so the two never fight; the matching stop switches back to nb.
 #
 # Files live on the SD card (the root filesystem is in RAM and jffs2 is
-# almost full): /boot/nb/nbd, nb.conf, this script, the FFTW wisdom, the
+# almost full), or in /tmp/nb + /mnt/jffs2/nb on a board without one (see below): /boot/nb/nbd, nb.conf, this script, the FFTW wisdom, the
 # remembered mode and the last LNB correction (lnb_offset: nbd looks for
 # the beacon around it first, so a START locks in a second or two). nbd is copied to /tmp to run, so a vfat mount option
 # cannot stop it from executing.
 
-NB_DIR=${NB_DIR:-/boot/nb}
-MODE_FILE=$NB_DIR/mode
+# A Pluto has no SD card: the app then copies nbd and this script to
+# /tmp/nb (RAM, again after each reboot, at the next START), and the few
+# small files that must last (nb.conf, mode, lnb_offset) go to the jffs2.
+if [ -z "$NB_DIR" ]; then
+    if [ -f /boot/nb/nbctl.sh ]; then NB_DIR=/boot/nb; else NB_DIR=$(cd "$(dirname "$0")" && pwd); fi
+fi
+if [ -z "$NB_STATE" ]; then
+    case "$NB_DIR" in /tmp/*) NB_STATE=/mnt/jffs2/nb ;; *) NB_STATE=$NB_DIR ;; esac
+fi
+mkdir -p "$NB_STATE" 2>/dev/null
+MODE_FILE=$NB_STATE/mode
 RUN_FLAG=/tmp/nb.run
 LOG=/tmp/nbd.log
 NBD_ARGS="--source pluto --ws 8073"
 NB_BOOT_MODE=datv
 NB_IDLE_EXIT=120
-[ -f "$NB_DIR/nb.conf" ] && . "$NB_DIR/nb.conf"
+[ -f "$NB_STATE/nb.conf" ] && . "$NB_STATE/nb.conf"
 
 log() { echo "nbctl: $*"; logger -t nbctl "$*" 2>/dev/null; }
 pub() { mosquitto_pub -h 127.0.0.1 -r -t "$1" -m "$2" 2>/dev/null; }
@@ -65,7 +74,7 @@ pause_zynqrx() {  # zynqrx gives the radio back on "process stop"
 start_nb() {
     # Read nb.conf again: the boot listener runs for days and must follow
     # changes made since (NBD_ARGS gaining --tx, for instance).
-    [ -f "$NB_DIR/nb.conf" ] && . "$NB_DIR/nb.conf"
+    [ -f "$NB_STATE/nb.conf" ] && . "$NB_STATE/nb.conf"
     pause_zynqrx
     stop_nbd
     cp "$NB_DIR/nbd" /tmp/nbd && chmod 755 /tmp/nbd || { log "cannot copy $NB_DIR/nbd"; return 1; }
@@ -81,9 +90,9 @@ start_nb() {
         while mine; do
             echo "--- nbd start $(date)" >>"$LOG"
             # Up to v1.28 nbd could save a wrong lock there: start afresh.
-            rm -f "$NB_DIR/lnb_correction"
+            rm -f "$NB_STATE/lnb_correction"
             rc=0
-            /tmp/nbd $NBD_ARGS --idle-exit "$NB_IDLE_EXIT" --wisdom "$NB_DIR/" --lnb-file "$NB_DIR/lnb_offset" \
+            /tmp/nbd $NBD_ARGS --idle-exit "$NB_IDLE_EXIT" --wisdom "$NB_DIR/" --lnb-file "$NB_STATE/lnb_offset" \
                 --quiet >>"$LOG" 2>&1 || rc=$?
             if [ "$rc" = 3 ] && mine; then
                 log "no app connected for ${NB_IDLE_EXIT} s: radio given back"

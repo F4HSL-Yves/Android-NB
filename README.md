@@ -191,6 +191,12 @@ mosquitto_pub -h 192.168.1.125 -t cmd/nb/mode -m datv   # retour au DATV
 mosquitto_sub -h 192.168.1.125 -t state/nb/mode         # mode courant (retenu)
 ```
 
+Sur un Pluto d'origine, sans carte SD, l'appli copie `nbd` et les scripts
+dans `/tmp/nb` (en RAM) et lance `install.sh` depuis là : rien n'est ajouté à
+`autorun.sh`, et `nb.conf`, `mode` et `lnb_offset` vont dans `/mnt/jffs2/nb`
+(la jffs2 du Pluto fait moins de 1 Mo). Après un redémarrage, le START suivant
+recopie les fichiers : l'appli vérifie leur présence par ssh à chaque START.
+
 Sur la carte : `sh /boot/nb/nbctl.sh nb|datv|status`. Le journal de `nbd`
 est dans `/tmp/nbd.log`, la wisdom FFTW dans `/boot/nb/`.
 

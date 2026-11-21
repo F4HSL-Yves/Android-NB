@@ -26,6 +26,12 @@ import java.io.File
  * Files go to /boot/nb on the SD card. nb.conf and the FFTW plans
  * (wdspWisdom00) are only written when missing, so the user's settings
  * survive updates.
+ *
+ * A board without an SD card (an original ADALM-Pluto has no slot) gets
+ * the files in /tmp/nb instead, in RAM, and nb.conf in /mnt/jffs2/nb (its
+ * jffs2 is under 1 MB, too small for nbd). Those files are gone after a
+ * reboot, so for such a board [needsUpdate] also checks over ssh that
+ * nbd is still there, and START copies it again when it is not.
  */
 class BoardInstaller(private val context: Context) {
 
@@ -51,6 +57,9 @@ class BoardInstaller(private val context: Context) {
         if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
     }.getOrDefault(0L)
 
+    /** True when [host] has no SD card: nbd lives in RAM there (see the class comment). */
+    private fun ramOnly(host: String): Boolean = prefs.getBoolean("ram_only_$host", false)
+
     /** Release tag this phone last installed on [host], if any. */
     private fun installedTag(host: String): String? =
         prefs.getString("installed_tag_$host", null)
@@ -68,11 +77,24 @@ class BoardInstaller(private val context: Context) {
         source.refresh()
         if (!available()) return false
         val done = installedTag(host) ?: return true
-        return BoardFiles.compareTags(source.best().tag, done) > 0
+        if (BoardFiles.compareTags(source.best().tag, done) > 0) return true
+        // No SD card: the board forgets nbd at each reboot.
+        return ramOnly(host) && !ramFilesPresent(host)
     }
 
+    /** Whether nbd is still in /tmp/nb on a board without an SD card (false if ssh fails). */
+    private fun ramFilesPresent(host: String): Boolean = runCatching {
+        val session = connect(host, password())
+        try {
+            exec(session, "test -f $RAM_DIR/nbd && test -f $RAM_DIR/nbctl.sh").first == 0
+        } finally {
+            session.disconnect()
+        }
+    }.getOrDefault(false)
+
     /** Forgets that [host] is up to date (its SD card was wiped, for instance). */
-    fun forgetInstalled(host: String) = prefs.edit().remove("installed_$host").remove("installed_tag_$host").apply()
+    fun forgetInstalled(host: String) =
+        prefs.edit().remove("installed_$host").remove("installed_tag_$host").remove("ram_only_$host").apply()
 
     /** Forgets the remembered host key of [host] (after reflashing the board). */
     fun forgetHost(host: String) {
@@ -84,6 +106,40 @@ class BoardInstaller(private val context: Context) {
     fun install(host: String, password: String, log: (String) -> Unit) {
         source.refresh(log)
         val bundle = source.best()
+        log("Connexion à root@$host…")
+        val session = connect(host, password)
+        try {
+            run(session, "test -d /mnt/jffs2", "Ce n'est pas une carte Tezuka (pas de /mnt/jffs2)")
+            val sd = exec(session, "test -d /boot && grep -q ' /boot ' /proc/mounts").first == 0
+            val dir = if (sd) SD_DIR else RAM_DIR
+            val state = if (sd) SD_DIR else JFFS2_DIR
+            if (!sd) log("Pas de carte SD (Pluto) : QO-100 NB tourne en mémoire, réglages dans la flash")
+            run(session, "mkdir -p $dir $state", if (sd) "Impossible de créer $dir sur la carte SD" else "Impossible de créer $dir")
+            for (name in files) {
+                // The settings go with the other files lasting a reboot.
+                val target = if (name == "nb.conf") "$state/$name" else "$dir/$name"
+                if (name in keepIfPresent && exec(session, "test -f $target").first == 0) {
+                    log("$name déjà présent : conservé")
+                    continue
+                }
+                val bytes = bundle.bytes(name)
+                log("Copie de $name (${bytes.size / 1024} ko)…")
+                upload(session, bytes, target)
+            }
+            log(if (sd) "Démarrage automatique et lancement…" else "Lancement…")
+            val (code, out) = exec(session, "NB_DIR=$dir sh $dir/install.sh 2>&1")
+            out.lines().filter { it.isNotBlank() }.forEach(log)
+            if (code != 0) throw IllegalStateException("install.sh a échoué (code $code)")
+            prefs.edit().putLong("installed_$host", appVersion).putString("installed_tag_$host", bundle.tag)
+                .putBoolean("ram_only_$host", !sd).putString("password", password).apply()
+            log("Terminé : QO-100 NB ${bundle.tag} est installé sur la carte.")
+        } finally {
+            session.disconnect()
+        }
+    }
+
+    /** Opens an ssh session to root@[host], with the host key rules of the class comment. */
+    private fun connect(host: String, password: String): Session {
         knownHosts.createNewFile()
         val jsch = JSch().apply { setKnownHosts(knownHosts.absolutePath) }
         val session = jsch.getSession("root", host, 22).apply {
@@ -95,7 +151,6 @@ class BoardInstaller(private val context: Context) {
             setConfig("PreferredAuthentications", "password,keyboard-interactive")
             timeout = 15_000
         }
-        log("Connexion à root@$host…")
         try {
             session.connect(15_000)
         } catch (e: JSchException) {
@@ -110,34 +165,17 @@ class BoardInstaller(private val context: Context) {
                 },
             )
         }
-        try {
-            run(session, "test -d /mnt/jffs2 && test -d /boot", "Ce n'est pas une carte Tezuka (pas de /mnt/jffs2 ou /boot)")
-            run(session, "mkdir -p /boot/nb", "Impossible de créer /boot/nb sur la carte SD")
-            for (name in files) {
-                val target = "/boot/nb/$name"
-                if (name in keepIfPresent && exec(session, "test -f $target").first == 0) {
-                    log("$name déjà présent : conservé")
-                    continue
-                }
-                val bytes = bundle.bytes(name)
-                log("Copie de $name (${bytes.size / 1024} ko)…")
-                upload(session, bytes, target)
-            }
-            log("Démarrage automatique et lancement…")
-            val (code, out) = exec(session, "sh /boot/nb/install.sh 2>&1")
-            out.lines().filter { it.isNotBlank() }.forEach(log)
-            if (code != 0) throw IllegalStateException("install.sh a échoué (code $code)")
-            prefs.edit().putLong("installed_$host", appVersion).putString("installed_tag_$host", bundle.tag)
-                .putString("password", password).apply()
-            log("Terminé : QO-100 NB ${bundle.tag} est installé sur la carte.")
-        } finally {
-            session.disconnect()
-        }
+        return session
     }
 
     companion object {
         /** Tezuka's root password out of the box. */
         const val DEFAULT_PASSWORD = "analog"
+        private const val SD_DIR = "/boot/nb"
+        /** No SD card: nbd and its scripts, in RAM (copied again after a reboot). */
+        private const val RAM_DIR = "/tmp/nb"
+        /** No SD card: nb.conf, the remembered mode and LNB correction. */
+        private const val JFFS2_DIR = "/mnt/jffs2/nb"
     }
 
     private fun run(session: Session, command: String, error: String) {

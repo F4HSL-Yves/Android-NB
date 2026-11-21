@@ -8,17 +8,30 @@
 # The Tezuka firmware itself is not modified: this only adds the start of
 # nbctl.sh to /mnt/jffs2/autorun.sh (run at boot by S98autostart), keeping
 # whatever that file already does, then starts NB right away.
+#
+# Board without an SD card (Pluto): the app copies the files to /tmp/nb
+# instead, and runs this script from there. /tmp is in RAM, so nothing is
+# added to autorun.sh: after a reboot, the app's next START copies them
+# again. nb.conf and the remembered mode and LNB correction stay in
+# /mnt/jffs2/nb (a few hundred bytes).
 set -e
-NB_DIR=/boot/nb
+NB_DIR=${NB_DIR:-$(cd "$(dirname "$0")" && pwd)}
+case "$NB_DIR" in /tmp/*) NB_STATE=/mnt/jffs2/nb ;; *) NB_STATE=$NB_DIR ;; esac
+export NB_DIR NB_STATE
 AUTORUN=/mnt/jffs2/autorun.sh
 LINE="[ -f $NB_DIR/nbctl.sh ] && sh $NB_DIR/nbctl.sh boot"
 
 [ -x /usr/bin/mosquitto_sub ] || [ -x /usr/sbin/mosquitto ] || command -v mosquitto_sub >/dev/null ||
     { echo "install.sh: no MQTT broker on this board: a Tezuka firmware is needed"; exit 1; }
-[ -f "$NB_DIR/nbd" ] && [ -f "$NB_DIR/nbctl.sh" ] && [ -f "$NB_DIR/nb.conf" ] ||
+mkdir -p "$NB_STATE"
+# Manual install on a Pluto (nb/ copied to /tmp/nb by scp): keep the settings in the jffs2.
+[ -f "$NB_STATE/nb.conf" ] || { [ -f "$NB_DIR/nb.conf" ] && cp "$NB_DIR/nb.conf" "$NB_STATE/nb.conf"; } || true
+[ -f "$NB_DIR/nbd" ] && [ -f "$NB_DIR/nbctl.sh" ] && [ -f "$NB_STATE/nb.conf" ] ||
     { echo "install.sh: copy the nb/ folder to $NB_DIR first"; exit 1; }
 
-if [ -f "$AUTORUN" ] && grep -qF "$NB_DIR/nbctl.sh boot" "$AUTORUN"; then
+if [ "$NB_STATE" != "$NB_DIR" ]; then
+    echo "no SD card: QO-100 NB runs from $NB_DIR (RAM), settings in $NB_STATE; copied again by the app after a reboot"
+elif [ -f "$AUTORUN" ] && grep -qF "$NB_DIR/nbctl.sh boot" "$AUTORUN"; then
     echo "autorun.sh already starts QO-100 NB"
 else
     [ -f "$AUTORUN" ] && cp "$AUTORUN" "$NB_DIR/autorun.sh.bak"
