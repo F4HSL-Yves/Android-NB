@@ -47,6 +47,11 @@ redémarrage du Pluto : l'appli s'en aperçoit au START suivant et recopie les
 fichiers toute seule, en quelques secondes. Sur un Pluto d'origine, utilisez
 Tezuka **v0.3.20** (fichier `pluto.frm` seul) : les versions 0.3.22 à 0.3.24
 ne démarrent pas avec le bootloader d'ADI.
+Si le son a des coupures sur un Pluto, vérifiez qu'il utilise ses deux cœurs
+(`grep -c processor /proc/cpuinfo` doit répondre 2) : l'environnement U-Boot
+d'ADI limite souvent à un seul cœur. Corrigez avec `maxcpus = 2` dans
+`config.txt` (lecteur USB « PlutoSDR ») ou `fw_setenv maxcpus 2` en ssh, puis
+redémarrez le Pluto.
 
 ## 2. Installer l'appli
 

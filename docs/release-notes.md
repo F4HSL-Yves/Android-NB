@@ -4,7 +4,7 @@ Mode d'emploi complet : https://github.com/F4HSL-Yves/Android-NB/blob/main/docs/
 
 ## Nouveautés de la prochaine version
 
-- **Pluto d'origine sans carte SD** : jusqu'ici, l'installation sur la carte exigeait une carte SD et s'arrêtait sur « Ce n'est pas une carte Tezuka » avec un ADALM-Pluto standard. L'appli installe maintenant QO-100 NB en mémoire sur ces Pluto, et garde les réglages dans leur flash. Après un redémarrage du Pluto, le START suivant réinstalle tout seul en quelques secondes. Utilisez Tezuka v0.3.20 sur un Pluto d'origine : les versions 0.3.22 à 0.3.24 ne démarrent pas avec le bootloader d'ADI. Si seul `pluto.frm` a été flashé, le Pluto garde l'environnement U-Boot d'ADI et Maia ne démarre pas (« failed to open maia-sdr UIO ») : la carte le corrige maintenant toute seule à chaque START, sans rien écrire dans la flash.
+- **Pluto d'origine sans carte SD** : jusqu'ici, l'installation sur la carte exigeait une carte SD et s'arrêtait sur « Ce n'est pas une carte Tezuka » avec un ADALM-Pluto standard. L'appli installe maintenant QO-100 NB en mémoire sur ces Pluto, et garde les réglages dans leur flash. Après un redémarrage du Pluto, le START suivant réinstalle tout seul en quelques secondes. Utilisez Tezuka v0.3.20 sur un Pluto d'origine : les versions 0.3.22 à 0.3.24 ne démarrent pas avec le bootloader d'ADI. Si seul `pluto.frm` a été flashé, le Pluto garde l'environnement U-Boot d'ADI et Maia ne démarre pas (« failed to open maia-sdr UIO ») : la carte le corrige maintenant toute seule à chaque START, sans rien écrire dans la flash. En cas de coupures du son sur un Pluto, activez son second cœur (`maxcpus = 2` dans `config.txt`) : l'environnement d'ADI n'en laisse souvent qu'un.
 
 ## Nouveautés de la v1.29
 
