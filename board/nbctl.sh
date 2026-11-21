@@ -71,12 +71,33 @@ pause_zynqrx() {  # zynqrx gives the radio back on "process stop"
     sleep 2
 }
 
+ensure_maia() {
+    # Pluto whose U-Boot environment is still ADI's (only pluto.frm
+    # flashed): the kernel starts without uio_pdrv_genirq.of_id=..., so the
+    # maia-sdr FPGA block gets no UIO device and maia-httpd, which nbd needs
+    # for the DDC, dies at boot ("failed to open maia-sdr UIO"). Bind the
+    # block to the generic UIO driver by hand and restart maia-httpd. Nothing
+    # is written to the flash; it is done again after each reboot.
+    grep -qs '^maia-sdr$' /sys/class/uio/uio*/name && return 0
+    d=$(ls -d /sys/bus/platform/devices/*maia-sdr 2>/dev/null | head -1)
+    [ -n "$d" ] && [ -d /sys/bus/platform/drivers/uio_pdrv_genirq ] || return 0
+    log "maia-sdr has no UIO device: binding it to uio_pdrv_genirq"
+    echo uio_pdrv_genirq >"$d/driver_override" 2>/dev/null
+    basename "$d" >/sys/bus/platform/drivers/uio_pdrv_genirq/bind 2>/dev/null
+    grep -qs '^maia-sdr$' /sys/class/uio/uio*/name || { log "UIO bind failed"; return 0; }
+    [ -x /etc/init.d/S60maia-httpd ] && /etc/init.d/S60maia-httpd restart >/dev/null 2>&1
+    i=0
+    while ! pidof maia-httpd >/dev/null 2>&1 && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+    sleep 2  # its HTTP port opens just after the process starts
+}
+
 start_nb() {
     # Read nb.conf again: the boot listener runs for days and must follow
     # changes made since (NBD_ARGS gaining --tx, for instance).
     [ -f "$NB_STATE/nb.conf" ] && . "$NB_STATE/nb.conf"
     pause_zynqrx
     stop_nbd
+    ensure_maia
     cp "$NB_DIR/nbd" /tmp/nbd && chmod 755 /tmp/nbd || { log "cannot copy $NB_DIR/nbd"; return 1; }
     # The flag holds this start's token: a restart loop left over from an
     # earlier start (asleep between two runs while stop_nbd removed the flag)
