@@ -64,6 +64,14 @@ class NbConnection {
     @Volatile var arduinoPresent = false
 
     @Volatile private var vCallsign: String? = null
+    /**
+     * Tezuka's own API (api_controller.sh: state/tx/gain, cmd/tx/active...)
+     * answers. A Pluto image has no pluto_stream (it comes with DATV), so no
+     * dt/pluto/<call>/... topic and no callsign: the PTT then drives the
+     * AD9363 through this API instead (gain, TX LO power), with no DMA to
+     * take back from pluto_stream.
+     */
+    @Volatile private var vApiSeen = false
     @Volatile private var vStreamMode: String? = null
     @Volatile private var vArduinoPtt: Boolean? = null
     @Volatile private var arduinoReports = 0L
@@ -188,6 +196,8 @@ class NbConnection {
                 m.subscribe("dt/pluto/+/tx/stream/mode")
                 m.subscribe("dt/pluto/+/tx/mute")
                 m.subscribe("dt/pluto/+/tx/gain")
+                m.subscribe("state/tx/gain")
+                m.subscribe("state/tx/active")
                 m.subscribe("arduino/status/ptt")
                 m.subscribe("arduino/status/pa/temp")
                 if (askNb) {
@@ -241,6 +251,18 @@ class NbConnection {
             payload.toDoubleOrNull()?.let { t -> main.post { paTempC = t } }
             return
         }
+        if (topic == "state/tx/gain" || topic == "state/tx/active") {
+            vApiSeen = true
+            if (vCallsign != null) return  // pluto_stream reports these itself
+            // sysfs values: "-10.000000 dB", "1"
+            val v = Regex("^-?\\d+(\\.\\d+)?").find(payload.trim())?.value?.toDoubleOrNull() ?: return
+            if (topic == "state/tx/active") {
+                main.post { txMuted = v != 0.0 }  // it is the TX LO powerdown flag
+            } else {
+                onTxGain(v)
+            }
+            return
+        }
         // dt/pluto/<call>/tx/...
         val parts = topic.split('/')
         if (parts.size < 5 || parts[0] != "dt" || parts[1] != "pluto") return
@@ -252,18 +274,29 @@ class NbConnection {
         when (parts.drop(3).joinToString("/")) {
             "tx/stream/mode" -> vStreamMode = payload
             "tx/mute" -> payload.toDoubleOrNull()?.let { v -> main.post { txMuted = v != 0.0 } }
-            "tx/gain" -> payload.toDoubleOrNull()?.let { v ->
-                vTxGain = v
-                main.post { txGainDb = v }
-                // Another program (SDR Console) leaves its own gain, -40 dB
-                // for instance: put ours back, once per link, outside a PTT.
-                val want = wantedTxGainDb
-                if (want != null && !gainRestored && ptt == Ptt.OFF && kotlin.math.abs(v - want) > 0.5) {
-                    gainRestored = true
-                    setTxGain(want)
-                }
-            }
+            "tx/gain" -> payload.toDoubleOrNull()?.let { v -> onTxGain(v) }
         }
+    }
+
+    private fun onTxGain(v: Double) {
+        vTxGain = v
+        main.post { txGainDb = v }
+        // Another program (SDR Console) leaves its own gain, -40 dB
+        // for instance: put ours back, once per link, outside a PTT.
+        val want = wantedTxGainDb
+        if (want != null && !gainRestored && ptt == Ptt.OFF && kotlin.math.abs(v - want) > 0.5) {
+            gainRestored = true
+            setTxGain(want)
+        }
+    }
+
+    /** TX gain command: through pluto_stream when it runs, else Tezuka's API. */
+    private fun gainTopic(call: String?) = if (call != null) "cmd/pluto/$call/tx/gain" else "cmd/tx/gain"
+
+    /** RF on or off: pluto_stream's mute, else the TX LO powerdown through Tezuka's API. */
+    private fun publishMute(m: MqttLite, call: String?, muted: Boolean) {
+        val v = if (muted) "1" else "0"
+        if (call != null) m.publish("cmd/pluto/$call/tx/mute", v) else m.publish("cmd/tx/active", v)
     }
 
     private class TxFail(message: String) : Exception(message)
@@ -312,10 +345,13 @@ class NbConnection {
         var failure = ""
         try {
             val m = mqtt ?: throw TxFail("MQTT de la carte injoignable")
-            val call = vCallsign ?: throw TxFail("Indicatif de la carte inconnu (aucun dt/pluto/… reçu)")
+            // pluto_stream reports every second; a Pluto image has none.
+            if (vCallsign == null) waitFor(2000) { vCallsign != null }
+            val call = vCallsign
+            if (call == null && !vApiSeen) throw TxFail("Ni pluto_stream ni l’API Tezuka ne répondent sur le MQTT de la carte")
             if (socket == null) throw TxFail("nbd n'est pas connecté")
-            // 1. pluto_stream must leave the TX DMA to nbd.
-            if (vStreamMode != "pass") {
+            // 1. pluto_stream must leave the TX DMA to nbd (none on a Pluto).
+            if (call != null && vStreamMode != "pass") {
                 if (savedStreamMode == null) savedStreamMode = vStreamMode
                 setPtt(Ptt.STARTING, "pluto_stream en mode pass…")
                 m.publish("cmd/pluto/$call/tx/stream/mode", "pass")
@@ -343,11 +379,11 @@ class NbConnection {
             wantedTxGainDb?.let { g ->
                 val cur = vTxGain
                 if (cur == null || kotlin.math.abs(cur - g) > 0.5) {
-                    m.publish("cmd/pluto/$call/tx/gain", g.toString())
+                    m.publish(gainTopic(call), g.toString())
                     waitFor(1500) { vTxGain?.let { kotlin.math.abs(it - g) <= 0.5 } == true }
                 }
             }
-            m.publish("cmd/pluto/$call/tx/mute", "0")
+            publishMute(m, call, false)
             setPtt(Ptt.ON, "Émission")
             while (!pttCancel) {
                 if (vTxState != "on") throw TxFail("nbd a coupé l’émission : $vTxMessage")
@@ -365,19 +401,20 @@ class NbConnection {
         // RF off first, then the Arduino, then nbd (which mutes again anyway).
         val m = mqtt
         val call = vCallsign
-        if (m != null && call != null) runCatching { m.publish("cmd/pluto/$call/tx/mute", "1") }
+        if (m != null && (call != null || vApiSeen)) runCatching { publishMute(m, call, true) }
         if (m != null && arduinoPresent) runCatching { m.publish("arduino/ptt", "off") }
         runCatching { socket?.sendText(NbProtocol.txCommand(false)) }
         mic.stop()
         setPtt(Ptt.OFF, failure)
     }
 
-    /** Tezuka's TX attenuation, -50..0 dB (cmd/pluto/<call>/tx/gain). */
+    /** Tezuka's TX attenuation, -50..0 dB (cmd/pluto/<call>/tx/gain, or cmd/tx/gain without pluto_stream). */
     fun setTxGain(db: Int) {
         wantedTxGainDb = db.coerceIn(-50, 0)
-        val call = vCallsign ?: return
+        val call = vCallsign
+        if (call == null && !vApiSeen) return
         val m = mqtt ?: return
-        Thread { runCatching { m.publish("cmd/pluto/$call/tx/gain", db.coerceIn(-50, 0).toString()) } }.start()
+        Thread { runCatching { m.publish(gainTopic(call), db.coerceIn(-50, 0).toString()) } }.start()
     }
 
     fun setTune(on: Boolean, hz: Int = 1000) = send(NbProtocol.tuneCommand(on, hz))
