@@ -33,6 +33,13 @@ class BoardFiles(private val context: Context) {
     private val cachedTag: String?
         get() = prefs.getString("cached_tag", null)?.takeIf { tag -> NAMES.all { File(cacheDir, it).isFile } && tag.isNotEmpty() }
 
+    /**
+     * CI debug APK (pull requests): no tag, so versionName stays at the
+     * build.gradle.kts default and every release looks newer. It must use
+     * its own board files, else a PR could never be tested on a board.
+     */
+    private val devBuild: Boolean get() = bundledTag == DEV_TAG && bundledAvailable()
+
     fun bundledAvailable(): Boolean = runCatching { context.assets.open("board/nbd").close() }.isSuccess
 
     fun available(): Boolean = bundledAvailable() || cachedTag != null
@@ -43,6 +50,7 @@ class BoardFiles(private val context: Context) {
      * network, GitHub slow): the files already on the phone are used.
      */
     fun refresh(log: (String) -> Unit = {}) {
+        if (devBuild) return
         val latest = runCatching { latestRelease() }.getOrNull() ?: return
         val (tag, zipUrl) = latest
         val have = listOfNotNull(cachedTag, bundledTag.takeIf { bundledAvailable() }).maxWithOrNull(::compareTags)
@@ -64,7 +72,7 @@ class BoardFiles(private val context: Context) {
 
     /** The newest files the phone has: downloaded release or the APK's own. */
     fun best(): Bundle {
-        val cached = cachedTag
+        val cached = cachedTag.takeUnless { devBuild }
         if (cached != null && (!bundledAvailable() || compareTags(cached, bundledTag) > 0)) {
             return Bundle(cached) { File(cacheDir, it).readBytes() }
         }
@@ -127,6 +135,9 @@ class BoardFiles(private val context: Context) {
         const val RELEASES_URL = "https://github.com/F4HSL-Yves/Android-NB/releases/latest"
 
         private const val API = "https://api.github.com/repos/F4HSL-Yves/Android-NB/releases/latest"
+
+        /** versionName of an untagged build ("0.1" in build.gradle.kts). */
+        private const val DEV_TAG = "v0.1"
 
         /** Files of the board package, in upload order; nbd is the big one. */
         val NAMES = listOf("nbctl.sh", "install.sh", "nb.conf", "wdspWisdom00", "nbd")
